@@ -1,0 +1,16 @@
+# npm / node
+node_modules/
+dist/
+*.tgz
+.npm-cache/
+
+# python
+__pycache__/
+*.pyc
+.pytest-libs/
+
+# local sync scratch (staging, backups, caches) - never commit
+.skill-sync/
+
+# superpowers SDD workspace
+.superpowers/

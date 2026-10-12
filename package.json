@@ -1,0 +1,41 @@
+{
+  "name": "skill-sync-dsh",
+  "version": "0.1.0",
+  "description": "DeepSeek Harness skill bundle that checks the upstream skill version of skill plugins built from open-source skill repositories and rebuilds them into installable tarballs. Skill-only bundle; the update path never touches the profile.",
+  "license": "MIT",
+  "type": "module",
+  "main": "./lib/index.js",
+  "exports": {
+    ".": "./lib/index.js",
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "lib",
+    "cordis.patch.yml",
+    "skills",
+    "README.md",
+    "README.zh.md",
+    "LICENSE",
+    "THIRD_PARTY_NOTICES.md",
+    "KNOWN_DEVIATIONS.md"
+  ],
+  "engines": {
+    "node": ">=18"
+  },
+  "keywords": [
+    "dsh-plugin",
+    "deepseek-harness",
+    "agent-skill",
+    "skill-management",
+    "upstream-version-check",
+    "skill-update"
+  ],
+  "scripts": {
+    "pack": "npm pack"
+  },
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    }
+  }
+}

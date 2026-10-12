@@ -1,0 +1,4 @@
+# This repository ships byte-exact content: upstream skill copies, test
+# fixtures, and reports whose digests are compared. Disable every line-ending
+# and encoding conversion so a checkout can never rewrite a byte.
+* -text

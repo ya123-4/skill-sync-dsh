@@ -1,0 +1,12 @@
+# skill-sync-dsh: skill-only bundle for DeepSeek Harness.
+# Inserts exactly one filesystem Skill provider whose only root is this
+# package's own skills/ directory, resolved from the installed package
+# identity anchored at the profile (Loader baseUrl), never as a path
+# concatenated onto baseUrl.
+- insert:
+    - id: skill-sync-filesystem
+      name: '@deepseek-ai/dsh-skill-filesystem'
+      config:
+        providerName: skill-sync-plugin
+        includeDefaultRoots: false
+        bundledSkillDir: !!js process.getBuiltinModule('node:path').join(process.getBuiltinModule('node:path').dirname(process.getBuiltinModule('node:module').createRequire(baseUrl).resolve('skill-sync-dsh/package.json')), 'skills')
