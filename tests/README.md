@@ -4,7 +4,7 @@ Run from the workspace root (`C:\Users\ybc12\Documents\deepseek-harness\default-
 
 ```powershell
 $env:PYTHONPATH = "$PWD\format-factory\.pytest-libs"
-python -m pytest dsh-plugin-build/skill-sync-dsh/tests --basetemp=tmpwork/skill-sync-pytest -p no:cacheprovider -v
+python -m pytest dsh-plugin-build/skill-sync-dsh/tests -p no:cacheprovider -p no:tmpdir -q
 ```
 
 Three environment facts drive this command:
@@ -14,12 +14,12 @@ Three environment facts drive this command:
    project uses. A local copy under `dsh-plugin-build\skill-sync-dsh\.pytest-libs` is also
    supported and is git-ignored, but it is not vendored because the copy is ~216 MB.
    `pip install --target ...` is the third option, though PyPI installs stall on this host.
-2. **`--basetemp` is mandatory.** The file sandbox denies writes outside the workspace, so
-   pytest's default system temp directory is not usable. Pointing `--basetemp` at
-   `tmpwork/skill-sync-pytest` keeps every `tmp_path` inside the workspace.
+2. **`-p no:tmpdir`.** pytest's tmp directory handling cannot run under the sandbox: even with
+   `--basetemp` inside the workspace, its cleanup hits `WinError 5` and turns passing tests
+   into errors. Tests use the `scratch` fixture from `conftest.py` instead — a
+   self-created, self-removed directory under `tmpwork/skill-sync-scratch`.
 3. **`-p no:cacheprovider`.** The sandbox also rejects pytest's cache-directory creation
-   (`WinError 5` on `pytest-cache-files-*` under the workspace root), so the cache plugin is
-   disabled. Nothing in this suite depends on it.
+   (`WinError 5` on `pytest-cache-files-*` under the workspace root). Nothing depends on it.
 
 Product code under `skills/skill-sync/scripts/` must import nothing outside the Python
 standard library; pytest is a test-only dependency.

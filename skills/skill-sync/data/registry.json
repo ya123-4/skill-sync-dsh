@@ -1,0 +1,187 @@
+{
+  "schema": 1,
+  "entries": [
+    {
+      "package": "agent-browser-skill-dsh",
+      "pluginDir": "dsh-plugin-build/agent-browser-skill-dsh",
+      "upstream": {
+        "repo": "vercel-labs/agent-browser",
+        "tagPrefix": "v",
+        "skillsRoot": "skill-data",
+        "stripPrefix": "agent-browser-"
+      },
+      "recipe": "agent_browser",
+      "expectedSkills": [
+        "agent-browser-agentcore",
+        "agent-browser-core",
+        "agent-browser-derive-client",
+        "agent-browser-dogfood",
+        "agent-browser-electron",
+        "agent-browser-protected-vercel-deployments",
+        "agent-browser-slack",
+        "agent-browser-vercel-sandbox",
+        "agent-browser-webmcp-gen"
+      ],
+      "manualSkills": [],
+      "license": "Apache-2.0",
+      "notes": "Upstream skills/ holds only a discovery stub; the nine skill bodies live in skill-data/<bare-name>/ and ship with an agent-browser- prefix plus four local overlay edits."
+    },
+    {
+      "package": "vercel-skills-dsh",
+      "pluginDir": "dsh-plugin-build/vercel-skills-dsh",
+      "upstream": {
+        "repo": "vercel-labs/skills",
+        "tagPrefix": "v",
+        "skillsRoot": "skills",
+        "stripPrefix": ""
+      },
+      "recipe": "vercel_skills",
+      "expectedSkills": [
+        "find-skills",
+        "pr-labeling",
+        "skills-cli"
+      ],
+      "manualSkills": [
+        "skills-cli"
+      ],
+      "license": "MIT",
+      "notes": "find-skills and pr-labeling are byte-identical upstream copies; skills-cli is hand-distilled from the upstream README and is therefore manual (reported, never rewritten)."
+    },
+    {
+      "package": "superpowers-skill-dsh",
+      "pluginDir": "dsh-plugin-build/superpowers-skill-dsh",
+      "upstream": {
+        "repo": "obra/superpowers",
+        "tagPrefix": "v",
+        "skillsRoot": "skills",
+        "stripPrefix": ""
+      },
+      "recipe": "superpowers",
+      "expectedSkills": [
+        "brainstorming",
+        "diagnosing-superpowers",
+        "dispatching-parallel-agents",
+        "executing-plans",
+        "finishing-a-development-branch",
+        "receiving-code-review",
+        "requesting-code-review",
+        "subagent-driven-development",
+        "systematic-debugging",
+        "test-driven-development",
+        "using-git-worktrees",
+        "using-superpowers",
+        "verification-before-completion",
+        "writing-plans",
+        "writing-skills"
+      ],
+      "manualSkills": [],
+      "license": "MIT",
+      "notes": "Every file under upstream skills/ is copied byte-for-byte; upstream hooks and IDE plugin configs live outside skills/ and are not bundled."
+    },
+    {
+      "package": "mattpocock-skills-dsh",
+      "pluginDir": "dsh-plugin-build/mattpocock-skills-dsh",
+      "upstream": {
+        "repo": "mattpocock/skills",
+        "tagPrefix": "v",
+        "skillsRoot": "skills",
+        "stripPrefix": ""
+      },
+      "recipe": "mattpocock",
+      "expectedSkills": [
+        "ask-matt",
+        "code-review",
+        "codebase-design",
+        "diagnosing-bugs",
+        "domain-modeling",
+        "grill-me",
+        "grill-with-docs",
+        "grilling",
+        "handoff",
+        "implement",
+        "implement-spec",
+        "improve-codebase-architecture",
+        "pr",
+        "prototype",
+        "research",
+        "retro",
+        "setup-matt-pocock-skills",
+        "tdd",
+        "teach",
+        "to-questionnaire",
+        "to-spec",
+        "to-tickets",
+        "triage",
+        "wait-what",
+        "wayfinder",
+        "wizard",
+        "writing-for-agents"
+      ],
+      "manualSkills": [],
+      "license": "MIT",
+      "notes": "The shipped set is exactly .claude-plugin/plugin.json's skills[]; upstream groups are flattened one level and two Claude-Code wordings are normalised for DSH."
+    },
+    {
+      "package": "open-design-skills-dsh",
+      "pluginDir": "dsh-plugin-build/open-design-skills-dsh",
+      "upstream": {
+        "repo": "nexu-io/open-design",
+        "tagPrefix": "open-design-v",
+        "skillsRoot": "skills",
+        "stripPrefix": ""
+      },
+      "recipe": "open_design",
+      "expectedSkills": [
+        "blog-post",
+        "critique",
+        "dashboard",
+        "docs-page",
+        "email-marketing",
+        "image-poster",
+        "meeting-notes",
+        "mobile-app",
+        "mobile-onboarding",
+        "od-build-test",
+        "od-code-import",
+        "od-code-migration",
+        "od-craft",
+        "od-critique-theater",
+        "od-default",
+        "od-design-extract",
+        "od-design-refine",
+        "od-design-systems",
+        "od-diff-review",
+        "od-direction-picker",
+        "od-discovery-question-form",
+        "od-figma-extract",
+        "od-figma-migration",
+        "od-handoff",
+        "od-media-generation",
+        "od-new-generation",
+        "od-next-strategy",
+        "od-nextjs-export",
+        "od-patch-edit",
+        "od-plugin-authoring",
+        "od-react-export",
+        "od-rewrite-plan",
+        "od-share-to-community",
+        "od-todo-write",
+        "od-token-map",
+        "od-tune-collab",
+        "od-vue-export",
+        "od-web-effect-extractor",
+        "pm-spec",
+        "pricing-page",
+        "saas-landing",
+        "simple-deck",
+        "social-carousel",
+        "web-prototype",
+        "weekly-update"
+      ],
+      "manualSkills": [],
+      "commitPinned": true,
+      "license": "Apache-2.0",
+      "notes": "Curated subset assembled from a pinned upstream commit via jsDelivr; atoms are renamed od-* and four scenario skills get synthesised frontmatter."
+    }
+  ]
+}
