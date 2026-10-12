@@ -1,14 +1,19 @@
-"""Upstream queries: the newest matching tag (and commit) for a registry entry.
+"""Upstream queries and pinned snapshot downloads for a registry entry.
 
 The network layer is injectable -- ``http(url, headers) -> (status, body)`` -- so
 every branch is testable without the GitHub API and without burning the 60/h
-anonymous quota. Downloads (snapshots) live in the same module but are filled in
-by a later task.
+anonymous quota.
+
+Two questions live here: "is there a newer release?" (GitHub API, cached) and
+"give me the bytes of that release" (codeload tarball, cached on disk).
 """
 from __future__ import annotations
 
 import json
+import re
+import shutil
 import ssl
+import tarfile
 import urllib.error
 import urllib.request
 from dataclasses import dataclass
@@ -250,3 +255,100 @@ class GithubClient:
         if fetched.tzinfo is None:
             fetched = fetched.replace(tzinfo=timezone.utc)
         return (self._now() - fetched).total_seconds() < self._ttl_seconds
+
+
+# ---- pinned snapshots ---------------------------------------------------
+
+SNAPSHOT_MARKER = ".complete"
+_COMMIT_RE = re.compile(r"[0-9a-fA-F]{7,40}")
+
+
+class SnapshotError(RuntimeError):
+    """A pinned upstream snapshot could not be fetched or unpacked (exit code 3)."""
+
+
+def snapshot_url(repo: str, ref: str) -> str:
+    """codeload URL for a tag or a commit SHA (no API quota involved)."""
+    if _COMMIT_RE.fullmatch(ref):
+        return f"https://codeload.github.com/{repo}/tar.gz/{ref}"
+    return f"https://codeload.github.com/{repo}/tar.gz/refs/tags/{ref}"
+
+
+def snapshot_slug(repo: str, ref: str) -> str:
+    return f"{repo.replace('/', '__')}__{re.sub(r'[^A-Za-z0-9._-]+', '_', ref)}"
+
+
+def fetch_snapshot(
+    entry: Entry,
+    ref: str,
+    cache_dir: Path | str,
+    http: HttpCallable | None = None,
+) -> Path:
+    """Download (once) and unpack ``repo@ref``; return the checkout directory.
+
+    codeload tarballs wrap everything in a single top-level directory
+    (``<repo>-<ref>``); a download that does not unpack to exactly one such
+    directory is rejected rather than half-used.
+    """
+    cache_dir = Path(cache_dir)
+    slug = snapshot_slug(entry.repo, ref)
+    root = cache_dir / "snapshots" / slug
+    marker = root / SNAPSHOT_MARKER
+
+    if marker.is_file():
+        cached = _single_top_dir(root)
+        if cached is not None:
+            return cached
+        raise SnapshotError(f"{slug}: cached snapshot has no single top-level directory")
+
+    _remove_tree(root)  # drop the corpse of any earlier failed attempt
+    root.mkdir(parents=True, exist_ok=True)
+
+    url = snapshot_url(entry.repo, ref)
+    try:
+        status, body = (http or default_http)(url, {"User-Agent": USER_AGENT})
+    except Exception as exc:  # noqa: BLE001 - transport failure is "snapshot unavailable"
+        _remove_tree(root)
+        raise SnapshotError(f"{entry.repo}@{ref}: download failed: {type(exc).__name__}: {exc}") from exc
+
+    if status != 200:
+        _remove_tree(root)
+        raise SnapshotError(f"{entry.repo}@{ref}: download failed with HTTP {status} ({url})")
+    if not body:
+        _remove_tree(root)
+        raise SnapshotError(f"{entry.repo}@{ref}: download was empty ({url})")
+
+    tarball = cache_dir / "tarballs" / f"{slug}.tar.gz"
+    tarball.parent.mkdir(parents=True, exist_ok=True)
+    tarball.write_bytes(body)
+
+    try:
+        with tarfile.open(tarball) as archive:
+            try:
+                archive.extractall(root, filter="data")
+            except TypeError:  # Python < 3.12 has no extraction filters
+                archive.extractall(root)
+    except tarfile.TarError as exc:
+        _remove_tree(root)
+        raise SnapshotError(f"{entry.repo}@{ref}: not a usable gzip tarball: {exc}") from exc
+
+    checkout = _single_top_dir(root)
+    if checkout is None:
+        _remove_tree(root)
+        raise SnapshotError(f"{entry.repo}@{ref}: tarball has no single top-level directory")
+
+    marker.write_text(f"{entry.repo}@{ref}\n", encoding="utf-8")
+    return checkout
+
+
+def _single_top_dir(root: Path) -> Path | None:
+    if not root.is_dir():
+        return None
+    children = [child for child in root.iterdir() if child.name != SNAPSHOT_MARKER]
+    if len(children) != 1 or not children[0].is_dir():
+        return None
+    return children[0]
+
+
+def _remove_tree(path: Path) -> None:
+    shutil.rmtree(path, ignore_errors=True)
