@@ -109,7 +109,13 @@ def _bump_manifest(manifest: Path, version: str) -> str:
     if not previous:
         raise ApplyFailed(f"{manifest}: no version field to replace")
 
-    updated = text.replace(f'"version": "{previous}"', f'"version": "{version}"', 1)
+    marker = f'"version": "{previous}"'
+    if marker not in text:
+        raise ApplyFailed(
+            f"{manifest}: cannot rewrite version {previous} - the manifest is not in the "
+            "expected shape, and landing it would publish a stale version"
+        )
+    updated = text.replace(marker, f'"version": "{version}"', 1)
     if previous != version:
         updated = re.sub(
             r'("description"\s*:\s*")([^"]*)"',

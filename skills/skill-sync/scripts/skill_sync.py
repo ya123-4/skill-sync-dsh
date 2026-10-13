@@ -15,6 +15,7 @@ import os
 import shutil
 import sys
 import tarfile
+import traceback
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Callable, Sequence
@@ -571,6 +572,8 @@ def run_verify(
                     issues.append(f"skill missing from disk: {name}")
                 elif recorded[name].get("sha256") != actual[name]["sha256"]:
                     issues.append(f"skill drift since the last sync: {name}")
+            for name in sorted(set(actual) - set(recorded)):
+                issues.append(f"skill present on disk but not in the state file: {name}")
 
         if profile_skills is not None:
             for name in entry.expected_skills:
@@ -635,9 +638,34 @@ def _select(entries, packages, want_all: bool, parser):
 
 
 def main(argv: Sequence[str] | None = None) -> int:
+    """Entry point that guarantees one of the documented exit codes.
+
+    The seven codes are a contract a caller reasons about, so an unmapped
+    exception is reported as code 2 with its traceback rather than escaping as an
+    interpreter failure with code 1.
+    """
     parser = build_parser()
     args = parser.parse_args(argv)
+    try:
+        return _dispatch(parser, args)
+    except KeyboardInterrupt:
+        print("interrupted", file=sys.stderr)
+        return EXIT_SELFCHECK
+    except RegistryError as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return EXIT_SELFCHECK
+    except Exception as exc:  # noqa: BLE001 - contract: never exit outside 0/2/3/4/5/6/7
+        print(f"error: unexpected {type(exc).__name__}: {exc}", file=sys.stderr)
+        print(
+            "hint: this is outside the documented exit codes; re-run with --workspace or "
+            "report it with the traceback below",
+            file=sys.stderr,
+        )
+        traceback.print_exc()
+        return EXIT_SELFCHECK
 
+
+def _dispatch(parser, args) -> int:
     try:
         workspace = resolve_workspace(Path.cwd(), args.workspace)
         entries = registry.load(workspace)

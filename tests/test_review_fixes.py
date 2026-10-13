@@ -7,17 +7,18 @@ the bundle's own docs.
 """
 import io
 import json
+import tarfile
 from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
 
 from core import state
-from core.apply import apply_candidate
+from core.apply import ApplyFailed, apply_candidate
 from core.pack import PackFailed, pack
 from core.registry import Entry
 from core.upstream import STATUS_UNKNOWN, STATUS_UP_TO_DATE, GithubClient, LatestInfo
-from skill_sync import default_upstream_provider, run_update
+from skill_sync import default_upstream_provider, run_update, run_verify
 
 
 # ---- helpers (deliberately local; the review tests must stand alone) ----
@@ -279,3 +280,92 @@ def test_apply_updates_version_references_in_docs(scratch):
     assert "1.0.0" not in (entry.plugin_dir / "THIRD_PARTY_NOTICES.md").read_text(
         encoding="utf-8"
     )
+
+
+# ---- M3: a manifest whose version cannot be rewritten must not land at all ----
+
+
+def test_apply_refuses_when_the_version_cannot_be_rewritten(scratch):
+    """Before this fix a reformatted manifest landed silently with the old version."""
+    entry = make_entry(scratch, version="1.0.0")
+    manifest = entry.plugin_dir / "package.json"
+    manifest.write_text(
+        '{"name": "demo-skill-dsh","version":"1.0.0","description":"demo 1.0.0"}',
+        encoding="utf-8",
+    )
+    staging = scratch / "staging" / "skills" / "alpha"
+    staging.mkdir(parents=True)
+    (staging / "SKILL.md").write_text(
+        "---\nname: alpha\ndescription: new\n---\n\nnew body\n", encoding="utf-8"
+    )
+
+    with pytest.raises(ApplyFailed):
+        apply_candidate(entry.plugin_dir, scratch / "staging" / "skills", "2.0.0")
+
+    text = manifest.read_text(encoding="utf-8")
+    assert "1.0.0" in text
+    assert "2.0.0" not in text
+
+
+# ---- M4: an unmapped exception must not escape as exit code 1 ----
+
+
+def test_cli_maps_unexpected_errors_to_exit_2(monkeypatch, capsys):
+    import skill_sync
+
+    def boom(workspace):
+        raise ValueError("registry exploded")
+
+    monkeypatch.setattr(skill_sync.registry, "load", boom)
+
+    code = skill_sync.main(["check", "--offline"])
+
+    captured = capsys.readouterr()
+    assert code == 2
+    assert "ValueError" in captured.err
+    assert "registry exploded" in captured.err
+
+
+# ---- M2: verify must see a skill directory the state file never recorded ----
+
+
+def test_verify_reports_a_skill_directory_added_by_hand(scratch):
+    entry = make_entry(scratch)
+    state.write(
+        entry.plugin_dir,
+        {
+            "package": entry.package,
+            "upstream": entry.repo,
+            "syncedTag": "v1.0.0",
+            "syncedCommit": None,
+            "skills": state.compute_tree_hashes(entry.plugin_dir / "skills"),
+        },
+    )
+    dist = scratch / "dist"
+    dist.mkdir()
+    version = json.loads(
+        (entry.plugin_dir / "package.json").read_text(encoding="utf-8")
+    )["version"]
+    with tarfile.open(dist / f"{entry.package}-{version}.tgz", "w:gz") as archive:
+        for skill in sorted((entry.plugin_dir / "skills").iterdir()):
+            for path in sorted(skill.rglob("*")):
+                if not path.is_file():
+                    continue
+                data = path.read_bytes()
+                info = tarfile.TarInfo(
+                    f"package/skills/{skill.name}/{path.relative_to(skill).as_posix()}"
+                )
+                info.size = len(data)
+                archive.addfile(info, io.BytesIO(data))
+
+    handmade = entry.plugin_dir / "skills" / "handmade"
+    handmade.mkdir()
+    (handmade / "SKILL.md").write_text(
+        "---\nname: handmade\ndescription: d\n---\n\nx\n", encoding="utf-8"
+    )
+
+    stream = io.StringIO()
+    code = run_verify([entry], scratch, dist_dir=dist, stream=stream)
+
+    assert code == 5
+    assert "handmade" in stream.getvalue()
