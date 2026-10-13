@@ -1,0 +1,7 @@
+## Windows notes for DeepSeek Harness
+
+On Windows hosts running inside a restricted desktop environment, two adjustments make agent-browser reliable:
+
+1. **Chrome sandbox**: Chrome for Testing may crash at launch with `CDP response channel closed` because the Chromium sandbox cannot initialize in restricted environments. If that happens, persist `{"args": "--no-sandbox"}` in `~/.agent-browser/config.json` (the CLI merges this config into every launch) or pass `--args "--no-sandbox"` per command. Verify with `agent-browser doctor`.
+2. **Daemon-spawning commands in captured terminals**: the first command of a task (`open`, `connect`, `session`, anything that auto-starts the daemon) spawns a long-lived daemon that inherits the terminal's stderr pipe, so a shell that captures output through a pipe (like this harness's command tool) may wait forever even though the command succeeded. Run daemon-spawning commands wrapped through `cmd /c` with output redirected to a file, e.g. `cmd /c "agent-browser open <url> > %TEMP%\ab-out.txt 2>&1"`, and check `%TEMP%\ab-out.txt` for the result. Once the daemon is running, all later commands (`snapshot`, `click`, `fill`, `screenshot`, ...) connect over the daemon socket and run normally without the wrapper.
+

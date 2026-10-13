@@ -67,6 +67,14 @@ def replace_between(text: str, start: str, end: str, block: str) -> str:
     return text[:start_index] + block + text[end_index:]
 
 
+def replace_once(text: str, old: str, new: str) -> str:
+    """Replace the first occurrence of ``old`` with ``new``."""
+    index = text.find(old)
+    if index < 0:
+        raise AnchorNotFound(f"text not found: {old!r}")
+    return text[:index] + new + text[index + len(old):]
+
+
 def write_tree(source: Path, target: Path) -> list[str]:
     """Copy a directory tree byte-for-byte; return the relative paths written."""
     written: list[str] = []

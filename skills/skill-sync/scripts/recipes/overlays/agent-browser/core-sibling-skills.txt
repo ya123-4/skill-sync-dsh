@@ -1,0 +1,10 @@
+## When to load another skill
+
+In DeepSeek Harness these specialized guides ship as sibling skills in the same plugin: load the matching skill (for example the `agent-browser-electron` skill) instead of fetching it from the CLI. The CLI equivalents remain available for other agents.
+
+- **Electron desktop app** (VS Code, Slack desktop, Discord, Figma, etc.): `agent-browser-electron` skill (`agent-browser skills get electron`)
+- **Slack workspace automation**: `agent-browser-slack` skill (`agent-browser skills get slack`)
+- **Exploratory testing / QA / bug hunts**: `agent-browser-dogfood` skill (`agent-browser skills get dogfood`)
+- **Vercel Sandbox microVMs**: `agent-browser-vercel-sandbox` skill (`agent-browser skills get vercel-sandbox`)
+- **Vercel deployment behind Authentication, SSO, or Deployment Protection**: `agent-browser-protected-vercel-deployments` skill (`agent-browser skills get protected-vercel-deployments`)
+- **AWS Bedrock AgentCore cloud browser**: `agent-browser-agentcore` skill (`agent-browser skills get agentcore`)

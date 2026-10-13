@@ -17,6 +17,7 @@ from recipes.base import (
     RecipeResult,
     insert_after,
     replace_between,
+    replace_once,
     write_tree,
 )
 
@@ -125,3 +126,12 @@ def test_context_accepts_a_staging_dir_outside_the_plugin_dir(scratch):
     context = make_context(scratch)
     assert context.upstream_ref == "v1.0.0"
     assert context.entry.package == "demo-skill-dsh"
+
+
+def test_replace_once_replaces_the_first_occurrence_only():
+    assert replace_once("a\nb\na\n", "a\n", "X\n") == "X\nb\na\n"
+
+
+def test_replace_once_missing_text_raises():
+    with pytest.raises(AnchorNotFound):
+        replace_once("a\n", "zzz", "X\n")

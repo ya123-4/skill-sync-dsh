@@ -111,3 +111,50 @@ def test_vercel_skills_golden(scratch):
     assert sorted(result.skills) == sorted(entry.expected_skills)
     assert result.manual_skills == ["skills-cli"]
     assert_tree_identical(staging / "skills", entry.plugin_dir / "skills")
+
+
+def test_agent_browser_golden(scratch):
+    from recipes.agent_browser import assemble
+
+    entry = registry_entry("agent-browser-skill-dsh")
+    staging = scratch / "staging"
+    staging.mkdir()
+
+    result = assemble(context_for(entry, staging))
+
+    assert sorted(result.skills) == sorted(entry.expected_skills)
+    assert result.manual_skills == []
+    assert_tree_identical(staging / "skills", entry.plugin_dir / "skills")
+
+
+def test_agent_browser_omits_the_discovery_stub(scratch):
+    from recipes.agent_browser import assemble
+
+    entry = registry_entry("agent-browser-skill-dsh")
+    staging = scratch / "staging"
+    staging.mkdir()
+    assemble(context_for(entry, staging))
+
+    # upstream skills/agent-browser/SKILL.md is a thin redirect stub, not a skill
+    assert not (staging / "skills" / "agent-browser").exists()
+
+
+def test_agent_browser_missing_skill_data_reports_structure_change(scratch):
+    from recipes.agent_browser import assemble
+    from recipes.base import StructureChanged
+
+    entry = registry_entry("agent-browser-skill-dsh")
+    upstream = scratch / "upstream"
+    upstream.mkdir()
+    staging = scratch / "staging"
+    staging.mkdir()
+    context = RecipeContext(
+        upstream_dir=upstream,
+        upstream_ref="v0.38.2",
+        plugin_dir=entry.plugin_dir,
+        staging_dir=staging,
+        entry=entry,
+    )
+
+    with pytest.raises(StructureChanged):
+        assemble(context)
