@@ -14,6 +14,7 @@ import re
 import shutil
 import ssl
 import tarfile
+import time
 import urllib.error
 import urllib.request
 from dataclasses import dataclass
@@ -283,12 +284,18 @@ def fetch_snapshot(
     ref: str,
     cache_dir: Path | str,
     http: HttpCallable | None = None,
+    attempts: int = 3,
+    sleep: Callable[[float], None] | None = None,
 ) -> Path:
     """Download (once) and unpack ``repo@ref``; return the checkout directory.
 
     codeload tarballs wrap everything in a single top-level directory
     (``<repo>-<ref>``); a download that does not unpack to exactly one such
     directory is rejected rather than half-used.
+
+    Transport failures are retried (see ``_download``): this host's TLS
+    middlebox truncates larger responses, and one flaky read must not cost a
+    whole rebuild.
     """
     cache_dir = Path(cache_dir)
     slug = snapshot_slug(entry.repo, ref)
@@ -306,17 +313,14 @@ def fetch_snapshot(
 
     url = snapshot_url(entry.repo, ref)
     try:
-        status, body = (http or default_http)(url, {"User-Agent": USER_AGENT})
-    except Exception as exc:  # noqa: BLE001 - transport failure is "snapshot unavailable"
+        status, body = _download(http or default_http, url, attempts=attempts, sleep=sleep)
+    except SnapshotError as exc:
         _remove_tree(root)
-        raise SnapshotError(f"{entry.repo}@{ref}: download failed: {type(exc).__name__}: {exc}") from exc
+        raise SnapshotError(f"{entry.repo}@{ref}: {exc}") from exc
 
     if status != 200:
         _remove_tree(root)
         raise SnapshotError(f"{entry.repo}@{ref}: download failed with HTTP {status} ({url})")
-    if not body:
-        _remove_tree(root)
-        raise SnapshotError(f"{entry.repo}@{ref}: download was empty ({url})")
 
     tarball = cache_dir / "tarballs" / f"{slug}.tar.gz"
     tarball.parent.mkdir(parents=True, exist_ok=True)
@@ -352,3 +356,38 @@ def _single_top_dir(root: Path) -> Path | None:
 
 def _remove_tree(path: Path) -> None:
     shutil.rmtree(path, ignore_errors=True)
+
+
+def _download(
+    call: HttpCallable,
+    url: str,
+    attempts: int = 3,
+    sleep: Callable[[float], None] | None = None,
+) -> tuple[int, bytes]:
+    """Fetch with a bounded number of retries.
+
+    A transport exception or a non-200 answer is retried: this host's TLS
+    middlebox truncates larger responses (``IncompleteRead``), and retrying is
+    far cheaper than failing a whole rebuild. A definitive answer -- 403 rate
+    limit or 404 missing repository -- is returned immediately, because retrying
+    it only burns quota.
+    """
+    non_retryable = frozenset({403, 404})
+    pause = sleep if sleep is not None else time.sleep
+    last_error = "no attempt was made"
+
+    for attempt in range(1, attempts + 1):
+        try:
+            status, body = call(url, {"User-Agent": USER_AGENT})
+        except Exception as exc:  # noqa: BLE001 - every transport failure is retryable
+            last_error = f"{type(exc).__name__}: {exc}"
+        else:
+            if status == 200 and body:
+                return status, body
+            if status in non_retryable:
+                return status, body
+            last_error = f"HTTP {status}"
+        if attempt < attempts:
+            pause(float(attempt))
+
+    raise SnapshotError(f"download failed after {attempts} attempt(s): {last_error}")

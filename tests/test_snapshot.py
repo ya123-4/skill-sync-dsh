@@ -116,3 +116,48 @@ def test_failed_download_leaves_no_partial_cache(scratch):
     # A later good download must succeed rather than trip over the corpse.
     root = fetch_snapshot(entry, "v1.0.0", cache, serving(build_tarball()))
     assert (root / "skills/foo/SKILL.md").is_file()
+
+
+def test_transient_transport_failure_is_retried(scratch):
+    import http.client
+
+    calls: list = []
+
+    def flaky(url, headers):
+        calls.append(url)
+        if len(calls) < 3:
+            raise http.client.IncompleteRead(b"partial")  # seen on this host's TLS middlebox
+        return 200, build_tarball()
+
+    root = fetch_snapshot(
+        make_entry(scratch), "v1.0.0", scratch / "cache", flaky, sleep=lambda _: None
+    )
+    assert len(calls) == 3
+    assert (root / "skills/foo/SKILL.md").is_file()
+
+
+def test_missing_release_is_not_retried(scratch):
+    calls: list = []
+    with pytest.raises(SnapshotError):
+        fetch_snapshot(
+            make_entry(scratch),
+            "v1.0.0",
+            scratch / "cache",
+            serving(b"", status=404, calls=calls),
+            sleep=lambda _: None,
+        )
+    assert len(calls) == 1
+
+
+def test_persistent_transport_failure_gives_up_after_three_attempts(scratch):
+    calls: list = []
+
+    def always_fails(url, headers):
+        calls.append(url)
+        raise TimeoutError("no answer")
+
+    with pytest.raises(SnapshotError):
+        fetch_snapshot(
+            make_entry(scratch), "v1.0.0", scratch / "cache", always_fails, sleep=lambda _: None
+        )
+    assert len(calls) == 3
