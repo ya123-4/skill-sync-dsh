@@ -277,3 +277,27 @@ def test_update_reports_the_install_command(scratch, dist):
     output = stream.getvalue()
     assert "demo-skill-dsh-2.0.0.tgz" in output
     assert "install" in output.lower()
+
+
+def test_update_rebuild_pinned_to_a_commit_keeps_state_comparable(scratch, dist):
+    """A commit ref must not be recorded as the tag; verify compares tags to versions."""
+    import dataclasses
+
+    entry = dataclasses.replace(make_entry(scratch, version="1.0.0"), baseline_commit="a" * 40)
+    upstream = make_upstream(scratch)
+
+    code = run_update(
+        [entry],
+        FakeClient(status=STATUS_UP_TO_DATE, tag="v1.0.0"),
+        scratch,
+        upstream_provider=provider(upstream),
+        dist_dir=dist,
+        rebuild=True,
+        pack_runner=fake_pack_runner(),
+        stream=io.StringIO(),
+    )
+
+    assert code == 0
+    payload = state.read(entry.plugin_dir)
+    assert payload["syncedTag"] == "v1.0.0"
+    assert payload["syncedCommit"] == "a" * 40

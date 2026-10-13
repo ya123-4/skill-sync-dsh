@@ -290,6 +290,16 @@ def _update_one(
     else:
         return UpdateRow(entry.package, "skipped", f"already up to date ({before_version})")
 
+    # The state file records both halves: the tag that version checks compare the
+    # bundle against, and the exact revision its bytes came from (a commit, for a
+    # bundle pinned to one). A commit must never be stored as the tag.
+    if normalize_tag(ref, entry.tag_prefix) is not None:
+        synced_tag = ref
+        synced_commit = info.commit
+    else:
+        synced_tag = f"{entry.tag_prefix}{target_version}"
+        synced_commit = ref
+
     try:
         upstream_dir = provider(entry, ref)
     except SnapshotError as exc:
@@ -408,8 +418,8 @@ def _update_one(
         {
             "package": entry.package,
             "upstream": entry.repo,
-            "syncedTag": ref,
-            "syncedCommit": info.commit,
+            "syncedTag": synced_tag,
+            "syncedCommit": synced_commit,
             "syncedAt": datetime.now(timezone.utc).isoformat(timespec="seconds"),
             "overlayVersion": 1,
             "skills": state.compute_tree_hashes(entry.plugin_dir / "skills"),
