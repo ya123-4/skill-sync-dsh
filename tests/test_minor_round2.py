@@ -19,6 +19,7 @@ from core import state
 from core.apply import apply_candidate
 from core.exitcodes import EXIT_UPSTREAM, EXIT_VERIFY
 from core.pack import PackFailed, pack
+from core.state import StateError
 from core.upstream import UpstreamError
 from helpers import (
     FakeClient,
@@ -235,7 +236,9 @@ def test_check_keeps_the_table_when_one_lookup_explodes(scratch):
 # ---- R4-3: the batch guard must classify what it catches ----
 
 
-def test_the_batch_guard_classifies_an_upstream_error_as_code_3(scratch, dist):
+def test_the_batch_guard_reports_an_unreadable_bundle_as_a_self_check_failure(scratch, dist):
+    """Upstream failures already arrive as `unknown` rows, so an exception that
+    escapes `_update_one` means this bundle's own files could not be read."""
     good = make_entry(scratch, package="good-skill-dsh")
     bad = make_entry(scratch, package="bad-skill-dsh")
     upstream = make_upstream(scratch, body="new body")
@@ -243,7 +246,7 @@ def test_the_batch_guard_classifies_an_upstream_error_as_code_3(scratch, dist):
     class ExplodingClient:
         def latest(self, entry):
             if entry.package == "bad-skill-dsh":
-                raise UpstreamError("repository not found or renamed (HTTP 404)")
+                raise UpstreamError("cannot read demo-skill-dsh/package.json")
             return SimpleNamespace(
                 status="update_available", tag="v2.0.0", commit=None, reason=None, source="test"
             )
@@ -260,10 +263,51 @@ def test_the_batch_guard_classifies_an_upstream_error_as_code_3(scratch, dist):
     )
 
     text = stream.getvalue()
-    assert code == EXIT_UPSTREAM
-    assert "upstream error" in text
-    assert "internal error" not in text
+    assert code == 2
+    assert "cannot read this bundle" in text
     assert "good-skill-dsh" in text
+    assert "install_bundle" in text
+
+
+# ---- the orphan-tarball cleanup must not eat a usable artifact ----
+
+
+def test_a_failed_state_write_puts_the_previous_tarball_back(scratch, dist, monkeypatch):
+    entry = make_entry(scratch)
+    dist.mkdir(parents=True, exist_ok=True)
+    stale = dist / "demo-skill-dsh-1.0.0.tgz"
+    stale.write_bytes(b"previous tarball")
+    upstream = make_upstream(scratch, body="new body")
+
+    def locked(plugin_dir, payload):
+        raise OSError("the state file is locked")
+
+    monkeypatch.setattr(skill_sync.state, "write", locked)
+
+    code = run_update(
+        [entry],
+        FakeClient(status="up_to_date", tag="v1.0.0"),
+        scratch,
+        upstream_provider=provider(upstream),
+        dist_dir=dist,
+        rebuild=True,
+        pack_runner=fake_pack_runner(),
+        stream=io.StringIO(),
+    )
+
+    assert code == 7
+    # pack() moved the old artifact aside; the rollback must put it back
+    assert stale.read_bytes() == b"previous tarball"
+
+
+# ---- a state file that is valid JSON but not an object ----
+
+
+def test_state_read_rejects_a_non_object_payload(scratch):
+    entry = make_entry(scratch)
+    state.state_path(entry.plugin_dir).write_text("[1, 2, 3]", encoding="utf-8")
+    with pytest.raises(StateError):
+        state.read(entry.plugin_dir)
 
 
 # ---- found live: the profile scan must survive an unreadable bundle ----

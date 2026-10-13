@@ -41,7 +41,6 @@ from core.upstream import (
     STATUS_UPDATE_AVAILABLE,
     GithubClient,
     SnapshotError,
-    UpstreamError,
     fetch_snapshot,
     local_version,
 )
@@ -282,16 +281,14 @@ def run_update(
                 pack_runner=pack_runner,
                 profile_skills=profile_skills,
             )
-        except UpstreamError as exc:
-            # A user-actionable upstream problem, not a defect in this tool.
-            row = UpdateRow(
-                entry.package, "failed", f"upstream error: {exc}", code=EXIT_UPSTREAM
-            )
         except Exception as exc:  # noqa: BLE001 - one broken bundle must not lose the batch
+            # `GithubClient.latest` already turns upstream failures into `unknown`
+            # rows, so an exception escaping here means this bundle's own files could
+            # not be read: a self-check failure (code 2), not an upstream one.
             row = UpdateRow(
                 entry.package,
                 "failed",
-                f"internal error: {type(exc).__name__}: {exc}",
+                f"cannot read this bundle: {type(exc).__name__}: {exc}",
                 code=EXIT_SELFCHECK,
             )
             traceback.print_exc()
@@ -501,10 +498,14 @@ def _update_one(
     except Exception as exc:  # noqa: BLE001 - a landing without its record is not a landing
         detail = f"cannot write the state file: {type(exc).__name__}: {exc}"
         if artifact is not None:
-            # The tarball belongs to a landing that is being rolled back; leaving it
-            # in dist/ would advertise a version this bundle does not contain.
+            # The tarball belongs to a landing that is being rolled back, so it must
+            # not stay in dist/ advertising a version this bundle does not contain.
+            # If packing moved an earlier artifact aside, that one goes back.
+            previous_artifact = artifact.parent / ".previous" / artifact.name
             try:
                 artifact.unlink()
+                if previous_artifact.is_file():
+                    shutil.move(str(previous_artifact), str(artifact))
             except OSError as cleanup_exc:
                 detail += f" | orphan tarball left behind: {cleanup_exc}"
         detail += _rollback_detail(entry.plugin_dir, backup)

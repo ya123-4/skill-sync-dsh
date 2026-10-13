@@ -31,6 +31,8 @@ def read(plugin_dir: Path | str) -> dict | None:
         payload = json.loads(path.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError) as exc:
         raise StateError(f"{path}: cannot read state: {exc}") from exc
+    if not isinstance(payload, dict):
+        raise StateError(f"{path}: state must be a JSON object, found {type(payload).__name__}")
     schema = payload.get("schema")
     if schema != STATE_SCHEMA:
         raise StateError(
