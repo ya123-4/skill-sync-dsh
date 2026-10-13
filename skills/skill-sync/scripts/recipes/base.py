@@ -18,6 +18,10 @@ class AnchorNotFound(ValueError):
     """An overlay anchor is missing, i.e. upstream text changed shape."""
 
 
+class StructureChanged(RuntimeError):
+    """Upstream no longer has the shape this recipe was written for (exit code 4)."""
+
+
 @dataclass(frozen=True)
 class RecipeContext:
     upstream_dir: Path
