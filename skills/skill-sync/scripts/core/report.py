@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import json
 from dataclasses import dataclass
+from pathlib import Path
 
 from core.upstream import STATUS_UNKNOWN, STATUS_UP_TO_DATE, STATUS_UPDATE_AVAILABLE
 
@@ -71,4 +72,48 @@ def render_check(rows: list[CheckRow], as_json: bool = False) -> str:
                 f"note: {row.package} ships manual skill(s) {names} - "
                 "upstream changes there are never applied automatically"
             )
+    return "\n".join(lines)
+
+
+@dataclass(frozen=True)
+class UpdateRow:
+    package: str
+    action: str
+    message: str = ""
+    code: int = 0
+    added: tuple[str, ...] = ()
+    removed: tuple[str, ...] = ()
+    changed: tuple[str, ...] = ()
+    issues: tuple[str, ...] = ()
+    artifact: Path | None = None
+    staging: Path | None = None
+
+
+def render_update(rows: list[UpdateRow]) -> str:
+    width = max((len(row.package) for row in rows), default=0)
+    lines = ["skill-sync update", ""]
+    for row in rows:
+        line = f"  {row.package:<{width}}  {row.action:<8}"
+        if row.message:
+            line += f"  {row.message}"
+        lines.append(line)
+        if row.added:
+            lines.append(f"      + skills: {' '.join(row.added)}")
+        if row.removed:
+            lines.append(f"      - skills: {' '.join(row.removed)}")
+        if row.changed:
+            sample = ", ".join(row.changed[:6])
+            more = "" if len(row.changed) <= 6 else f" (+{len(row.changed) - 6} more)"
+            lines.append(f"      ~ {len(row.changed)} changed file(s): {sample}{more}")
+        for issue in row.issues:
+            lines.append(f"      ! {issue}")
+        if row.staging is not None:
+            lines.append(f"      staging kept: {row.staging}")
+
+    artifacts = [row for row in rows if row.artifact is not None]
+    if artifacts:
+        lines.append("")
+        lines.append("next step (this tool never touches the profile):")
+        for row in artifacts:
+            lines.append(f"  install_bundle  {row.artifact}")
     return "\n".join(lines)
