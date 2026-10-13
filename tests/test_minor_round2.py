@@ -264,7 +264,7 @@ def test_the_batch_guard_reports_an_unreadable_bundle_as_a_self_check_failure(sc
 
     text = stream.getvalue()
     assert code == 2
-    assert "cannot read this bundle" in text
+    assert "could not process this bundle" in text
     assert "good-skill-dsh" in text
     assert "install_bundle" in text
 
@@ -308,6 +308,42 @@ def test_state_read_rejects_a_non_object_payload(scratch):
     state.state_path(entry.plugin_dir).write_text("[1, 2, 3]", encoding="utf-8")
     with pytest.raises(StateError):
         state.read(entry.plugin_dir)
+
+
+# ---- the three small ones kept from the last review ----
+
+
+def test_state_write_removes_its_temporary_file_on_failure(scratch, monkeypatch):
+    entry = make_entry(scratch)
+    state.write(entry.plugin_dir, {"package": entry.package, "syncedTag": "v1.0.0"})
+
+    def explode(*args, **kwargs):
+        raise OSError("disk full")
+
+    monkeypatch.setattr(os, "replace", explode)
+    with pytest.raises(OSError):
+        state.write(entry.plugin_dir, {"package": entry.package, "syncedTag": "v2.0.0"})
+
+    assert not list(entry.plugin_dir.glob("*.tmp"))
+
+
+def test_profile_scan_survives_an_unreadable_node_modules(scratch, monkeypatch):
+    from pathlib import Path as _Path
+
+    profile = scratch / "profile"
+    node_modules = profile / "node_modules"
+    node_modules.mkdir(parents=True)
+
+    real_iterdir = _Path.iterdir
+
+    def guarded(self):
+        if self == node_modules:
+            raise PermissionError("access is denied")
+        return real_iterdir(self)
+
+    monkeypatch.setattr(_Path, "iterdir", guarded)
+
+    assert skill_sync._profile_skills(profile) == {}
 
 
 # ---- found live: the profile scan must survive an unreadable bundle ----

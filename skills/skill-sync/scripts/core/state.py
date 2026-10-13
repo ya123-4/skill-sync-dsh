@@ -48,8 +48,17 @@ def write(plugin_dir: Path | str, payload: dict) -> Path:
     # Write beside the target and swap it in: a failure part-way through cannot
     # truncate the record of the previous sync.
     temporary = path.with_name(path.name + ".tmp")
-    temporary.write_bytes(data)
-    os.replace(temporary, path)
+    try:
+        temporary.write_bytes(data)
+        os.replace(temporary, path)
+    except BaseException:
+        # A failed or interrupted write must not leave the temporary behind: it is
+        # scratch, while the state file itself is committed with the bundle.
+        try:
+            temporary.unlink()
+        except OSError:
+            pass
+        raise
     return path
 
 

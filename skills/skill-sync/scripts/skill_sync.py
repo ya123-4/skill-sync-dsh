@@ -283,12 +283,12 @@ def run_update(
             )
         except Exception as exc:  # noqa: BLE001 - one broken bundle must not lose the batch
             # `GithubClient.latest` already turns upstream failures into `unknown`
-            # rows, so an exception escaping here means this bundle's own files could
-            # not be read: a self-check failure (code 2), not an upstream one.
+            # rows, so an exception escaping here is this bundle's own problem: a
+            # self-check failure (code 2), not an upstream one.
             row = UpdateRow(
                 entry.package,
                 "failed",
-                f"cannot read this bundle: {type(exc).__name__}: {exc}",
+                f"could not process this bundle: {type(exc).__name__}: {exc}",
                 code=EXIT_SELFCHECK,
             )
             traceback.print_exc()
@@ -548,9 +548,12 @@ def _profile_skills(profile_dir: Path) -> dict[str, str]:
     """``{skill name: owning bundle}`` for every bundle installed in a profile."""
     found: dict[str, str] = {}
     node_modules = Path(profile_dir) / "node_modules"
-    if not node_modules.is_dir():
+    try:
+        bundles = sorted(node_modules.iterdir())
+    except OSError:
+        # A missing or unreadable node_modules is not a reason to fail the command.
         return found
-    for bundle in sorted(node_modules.iterdir()):
+    for bundle in bundles:
         skills = bundle / "skills"
         try:
             if not bundle.is_dir() or not skills.is_dir():
