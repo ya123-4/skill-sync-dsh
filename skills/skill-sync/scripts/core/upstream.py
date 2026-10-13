@@ -153,11 +153,13 @@ class GithubClient:
         if status == 200:
             try:
                 payload = json.loads(body or b"{}")
-            except json.JSONDecodeError as exc:
+            except (json.JSONDecodeError, UnicodeDecodeError) as exc:
                 raise UpstreamError(f"{entry.repo}: malformed release payload: {exc}") from exc
             tag = payload.get("tag_name")
-            if isinstance(tag, str) and tag:
-                commit = self._query_commit(entry, headers) if entry.commit_pinned else None
+            # A release tag still has to look like one of this entry's versions;
+            # otherwise the tag list is the better answer (and may be newer).
+            if isinstance(tag, str) and tag and normalize_tag(tag, entry.tag_prefix):
+                commit = self._query_commit(entry, headers, tag) if entry.commit_pinned else None
                 return tag, commit, "release"
 
         return self._query_tags(entry, headers)
@@ -175,23 +177,36 @@ class GithubClient:
 
         try:
             tags = json.loads(body or b"[]")
-        except json.JSONDecodeError as exc:
+        except (json.JSONDecodeError, UnicodeDecodeError) as exc:
             raise UpstreamError(f"{entry.repo}: malformed tag payload: {exc}") from exc
 
+        # GitHub does not contract an order, so take the greatest matching version
+        # rather than the first one on the page.
+        best: str | None = None
+        best_version: str | None = None
         for item in tags:
             name = item.get("name") if isinstance(item, dict) else None
-            if isinstance(name, str) and normalize_tag(name, entry.tag_prefix):
-                commit = self._query_commit(entry, headers) if entry.commit_pinned else None
-                return name, commit, "tags"
-        return None, None, "tags"
+            if not isinstance(name, str):
+                continue
+            version = normalize_tag(name, entry.tag_prefix)
+            if version is None:
+                continue
+            if best is None or is_newer(best_version or version, version):
+                best, best_version = name, version
+        if best is None:
+            return None, None, "tags"
 
-    def _query_commit(self, entry: Entry, headers: dict) -> str | None:
-        status, body = self._call(f"{API_ROOT}/repos/{entry.repo}/commits/main", headers)
+        commit = self._query_commit(entry, headers, best) if entry.commit_pinned else None
+        return best, commit, "tags"
+
+    def _query_commit(self, entry: Entry, headers: dict, ref: str) -> str | None:
+        """The commit a tag points at -- not whatever ``main`` is today."""
+        status, body = self._call(f"{API_ROOT}/repos/{entry.repo}/commits/{ref}", headers)
         if status != 200:
             return None
         try:
             return json.loads(body or b"{}").get("sha")
-        except json.JSONDecodeError:
+        except (json.JSONDecodeError, UnicodeDecodeError):
             return None
 
     # ---- evaluation -----------------------------------------------------

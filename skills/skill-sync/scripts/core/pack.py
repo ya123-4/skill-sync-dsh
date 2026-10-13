@@ -49,10 +49,12 @@ def pack(
 
     dist_dir.mkdir(parents=True, exist_ok=True)
     artifact = dist_dir / f"{name}-{version}.tgz"
+    moved_previous: Path | None = None
     if artifact.is_file():
         previous = dist_dir / ".previous"
         previous.mkdir(parents=True, exist_ok=True)
-        shutil.move(str(artifact), str(previous / artifact.name))
+        moved_previous = previous / artifact.name
+        shutil.move(str(artifact), str(moved_previous))
 
     env = os.environ.copy()
     env["npm_config_cache"] = str(
@@ -60,15 +62,22 @@ def pack(
     )
     argv = [str(npm_path), "pack", str(plugin_dir), "--pack-destination", str(dist_dir)]
 
-    run = runner or _default_runner
-    result = run(argv, env)
-    returncode = getattr(result, "returncode", 1)
-    if returncode != 0:
-        detail = (getattr(result, "stderr", "") or "").strip()
-        raise PackFailed(f"npm pack failed ({returncode}): {detail}")
+    try:
+        run = runner or _default_runner
+        result = run(argv, env)
+        returncode = getattr(result, "returncode", 1)
+        if returncode != 0:
+            detail = (getattr(result, "stderr", "") or "").strip()
+            raise PackFailed(f"npm pack failed ({returncode}): {detail}")
 
-    if not artifact.is_file() or artifact.stat().st_size == 0:
-        raise PackFailed(f"npm pack produced no usable artifact: {artifact}")
+        if not artifact.is_file() or artifact.stat().st_size == 0:
+            raise PackFailed(f"npm pack produced no usable artifact: {artifact}")
+    except BaseException:
+        # The profile installs from this exact path, so a failed pack must leave
+        # the previous artifact where it was.
+        if moved_previous is not None and not artifact.exists():
+            shutil.move(str(moved_previous), str(artifact))
+        raise
     return artifact
 
 

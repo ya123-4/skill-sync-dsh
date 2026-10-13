@@ -35,6 +35,7 @@ from core.pack import PackFailed, pack
 from core.registry import RegistryError, resolve_workspace
 from core.report import CheckRow, UpdateRow, render_check, render_update
 from core.upstream import (
+    STATUS_UP_TO_DATE,
     STATUS_UPDATE_AVAILABLE,
     GithubClient,
     SnapshotError,
@@ -79,6 +80,11 @@ def build_parser() -> argparse.ArgumentParser:
     update.add_argument("--rebuild", action="store_true", help="rebuild even without a new release")
     update.add_argument("--keep-staging", action="store_true", help="keep the staging directory")
     update.add_argument("--no-pack", action="store_true", help="land the tree without packing")
+    update.add_argument(
+        "--profile",
+        default=None,
+        help="DSH profile to scan for skill-name collisions (default: the desktop profile)",
+    )
     update.add_argument("--refresh", action="store_true", help="ignore the 10-minute cache")
     update.add_argument("--offline", action="store_true", help="use only cached results")
 
@@ -106,6 +112,15 @@ def default_staging_root(workspace: Path) -> Path:
 
 def default_dist_dir(workspace: Path) -> Path:
     return workspace / "dsh-plugin-build" / "dist"
+
+
+def default_profile() -> Path | None:
+    """The desktop profile to scan for skill-name collisions, when it exists."""
+    home = os.environ.get("USERPROFILE") or os.environ.get("HOME")
+    if not home:
+        return None
+    candidate = Path(home) / ".dsh" / "profiles" / "desktop"
+    return candidate if candidate.is_dir() else None
 
 
 def _stamp() -> str:
@@ -136,12 +151,14 @@ def default_upstream_provider(workspace: Path) -> Callable[[object, str], Path]:
 
     def _provider(entry, ref: str) -> Path:
         if entry.recipe == "open_design":
-            commit = entry.baseline_commit or ref
-            root = sources / commit
+            # The ref decides which material is read: a rebuild passes the pinned
+            # commit, an update passes the commit the new tag points at. Missing
+            # material is an error, never a silent reuse of the bytes we have.
+            root = sources / ref
             if not root.is_dir():
                 raise SnapshotError(
-                    f"{entry.package}: open-design material for {commit} is not cached; run "
-                    f"python tools/fetch_open_design_sources.py --commit {commit}"
+                    f"{entry.package}: open-design material for {ref} is not cached; run "
+                    f"python tools/fetch_open_design_sources.py --commit {ref}"
                 )
             return root
         return fetch_snapshot(entry, ref, snapshots)
@@ -225,6 +242,7 @@ def run_update(
     pack_runner=None,
     dist_dir: Path | str | None = None,
     staging_root: Path | str | None = None,
+    profile: Path | str | None = None,
     accept_structure_change: bool = False,
     dry_run: bool = False,
     rebuild: bool = False,
@@ -239,6 +257,7 @@ def run_update(
     staging_root = (
         Path(staging_root) if staging_root is not None else default_staging_root(workspace)
     )
+    profile_skills = _profile_skills(Path(profile)) if profile is not None else {}
 
     rows: list[UpdateRow] = []
     exit_code = EXIT_OK
@@ -255,6 +274,7 @@ def run_update(
             keep_staging=keep_staging,
             no_pack=no_pack,
             pack_runner=pack_runner,
+            profile_skills=profile_skills,
         )
         rows.append(row)
         if row.code and exit_code == EXIT_OK:
@@ -277,6 +297,7 @@ def _update_one(
     keep_staging: bool,
     no_pack: bool,
     pack_runner,
+    profile_skills: dict | None = None,
 ) -> UpdateRow:
     before_version = local_version(entry)
     info = client.latest(entry)
@@ -287,8 +308,17 @@ def _update_one(
     elif rebuild:
         ref = entry.baseline_commit or f"{entry.tag_prefix}{before_version}"
         target_version = before_version
-    else:
+    elif info.status == STATUS_UP_TO_DATE:
         return UpdateRow(entry.package, "skipped", f"already up to date ({before_version})")
+    else:
+        # "unknown" is not "current": a 404, a rate limit or --offline must never
+        # be reported as a bundle that needs nothing.
+        return UpdateRow(
+            entry.package,
+            "unknown",
+            f"cannot compare with upstream: {info.reason or 'no answer from upstream'}",
+            code=EXIT_UPSTREAM,
+        )
 
     # The state file records both halves: the tag that version checks compare the
     # bundle against, and the exact revision its bytes came from (a commit, for a
@@ -341,10 +371,16 @@ def _update_one(
         if entry.manual_skills
         else None
     )
+    # Names owned by *other* installed bundles; the bundle's own installed copy is
+    # expected to share names with the candidate.
+    foreign_skills = {
+        name for name, owner in (profile_skills or {}).items() if owner != entry.package
+    }
     issues = verify_candidate(
         staging,
         entry,
         previous=previous if previous.is_dir() else None,
+        profile_skills=foreign_skills,
         manual_snapshot=manual,
     )
     structure_issues = [issue for issue in issues if issue.code == "structure-changed"]
@@ -627,6 +663,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             selected,
             _client(workspace, args),
             workspace,
+            profile=args.profile or default_profile(),
             accept_structure_change=args.accept_structure_change,
             dry_run=args.dry_run,
             rebuild=args.rebuild,
@@ -640,7 +677,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         except RegistryError as exc:
             print(f"error: {exc}", file=sys.stderr)
             return EXIT_SELFCHECK
-        return run_verify(selected, workspace, profile=args.profile)
+        return run_verify(selected, workspace, profile=args.profile or default_profile())
 
     parser.error(f"command not implemented yet: {args.command}")
     return EXIT_OK
