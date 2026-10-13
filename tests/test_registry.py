@@ -55,10 +55,13 @@ def test_mattpocock_is_pinned_to_a_content_commit(registry):
     assert entry.commit_pinned is True
 
 
-def test_only_mattpocock_carries_a_content_commit(registry):
+def test_content_commits_are_recorded_where_the_bytes_need_one(registry):
+    expected = {
+        "mattpocock-skills-dsh": "49dd158d1076134a641b33efb035946536778336",
+        "open-design-skills-dsh": "17e255959703a3fad7c8eb7f7b70dcafccc5629a",
+    }
     for entry in registry:
-        if entry.package != "mattpocock-skills-dsh":
-            assert entry.baseline_commit is None, entry.package
+        assert entry.baseline_commit == expected.get(entry.package), entry.package
 
 
 def test_expected_skills_match_what_is_installed(registry):

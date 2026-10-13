@@ -182,8 +182,9 @@
       ],
       "manualSkills": [],
       "commitPinned": true,
+      "baselineCommit": "17e255959703a3fad7c8eb7f7b70dcafccc5629a",
       "license": "Apache-2.0",
-      "notes": "Curated subset assembled from a pinned upstream commit via jsDelivr; atoms are renamed od-* and four scenario skills get synthesised frontmatter."
+      "notes": "Curated subset assembled from a pinned upstream commit via jsDelivr; atoms are renamed od-* and four scenario skills get synthesised frontmatter. Source material is cached under tmpwork/od-source/<commit>/."
     }
   ]
 }

@@ -226,3 +226,93 @@ def _write_fake_mattpocock_upstream(upstream: Path) -> None:
             f"---\nname: {name}\ndescription: x\n---\n\nUse the Skill tool.\n",
             encoding="utf-8",
         )
+
+
+OPEN_DESIGN_SOURCES = WORKSPACE / "tmpwork" / "od-source"
+
+
+def open_design_sources(entry) -> Path:
+    """The cached jsDelivr material for the pinned open-design commit.
+
+    open-design is a 3.5 GB repository, so the source material is fetched per file
+    rather than as a tarball; the cache is populated by
+    ``tools/fetch_open_design_sources.py``.
+    """
+    root = OPEN_DESIGN_SOURCES / str(entry.baseline_commit)
+    if not root.is_dir():
+        pytest.skip(
+            f"missing open-design source cache for {entry.baseline_commit}; "
+            f"run: python tools/fetch_open_design_sources.py --commit {entry.baseline_commit}"
+        )
+    return root
+
+
+def open_design_context(entry, staging: Path) -> RecipeContext:
+    return RecipeContext(
+        upstream_dir=open_design_sources(entry),
+        upstream_ref=str(entry.baseline_commit),
+        plugin_dir=entry.plugin_dir,
+        staging_dir=staging,
+        entry=entry,
+    )
+
+
+def test_open_design_golden(scratch):
+    from recipes.open_design import assemble
+
+    entry = registry_entry("open-design-skills-dsh")
+    staging = scratch / "staging"
+    staging.mkdir()
+
+    result = assemble(open_design_context(entry, staging))
+
+    assert sorted(result.skills) == sorted(entry.expected_skills)
+    assert result.manual_skills == []
+    assert_tree_identical(staging / "skills", entry.plugin_dir / "skills")
+
+
+def test_open_design_atoms_are_renamed(scratch):
+    from recipes.open_design import assemble
+
+    entry = registry_entry("open-design-skills-dsh")
+    staging = scratch / "staging"
+    staging.mkdir()
+    assemble(open_design_context(entry, staging))
+
+    assert (staging / "skills" / "od-handoff" / "SKILL.md").is_file()
+    assert (staging / "skills" / "od-token-map" / "SKILL.md").is_file()
+    assert not (staging / "skills" / "handoff").exists()
+
+
+def test_open_design_injects_the_harness_note(scratch):
+    from recipes.open_design import assemble
+
+    entry = registry_entry("open-design-skills-dsh")
+    staging = scratch / "staging"
+    staging.mkdir()
+    assemble(open_design_context(entry, staging))
+
+    # The two index skills are authored here, not derived from an upstream body.
+    index_skills = {"od-craft", "od-design-systems"}
+    missing = [
+        path.parent.name
+        for path in sorted((staging / "skills").glob("*/SKILL.md"))
+        if path.parent.name not in index_skills
+        and "DeepSeek Harness note" not in path.read_text(encoding="utf-8")
+    ]
+    assert missing == []
+
+
+def test_open_design_synthesizes_frontmatter_for_body_only_scenarios(scratch):
+    from recipes.open_design import assemble
+
+    entry = registry_entry("open-design-skills-dsh")
+    staging = scratch / "staging"
+    staging.mkdir()
+    assemble(open_design_context(entry, staging))
+
+    for name in ("od-design-refine", "od-react-export", "od-nextjs-export", "od-vue-export"):
+        text = (staging / "skills" / name / "SKILL.md").read_text(encoding="utf-8")
+        assert text.startswith("---\n"), name
+        assert f"name: {name}" in text, name
+        assert "description:" in text, name
