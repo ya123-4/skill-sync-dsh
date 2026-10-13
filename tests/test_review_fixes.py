@@ -660,3 +660,36 @@ def test_pack_restores_the_previous_tarball_over_a_zero_byte_artifact(scratch):
 
     assert stale.read_bytes() == b"old tarball"
     assert not (dist / ".previous" / "demo-skill-dsh-1.0.0.tgz").exists()
+
+
+# ---- round 4: the state write must roll back on an interrupt too ----
+
+
+def test_update_rolls_back_when_the_state_write_is_interrupted(scratch, dist, monkeypatch):
+    import skill_sync
+
+    entry = make_entry(scratch)
+    (entry.plugin_dir / "README.md").write_text("Bundle for v1.0.0.\n", encoding="utf-8")
+    upstream = make_upstream(scratch, body="new body")
+
+    def interrupted(plugin_dir, payload):
+        raise KeyboardInterrupt()
+
+    monkeypatch.setattr(skill_sync.state, "write", interrupted)
+
+    with pytest.raises(KeyboardInterrupt):
+        run_update(
+            [entry],
+            FakeClient(status="update_available", tag="v2.0.0"),
+            scratch,
+            upstream_provider=provider(upstream),
+            dist_dir=dist,
+            pack_runner=fake_pack_runner(),
+            stream=io.StringIO(),
+        )
+
+    manifest = json.loads((entry.plugin_dir / "package.json").read_text(encoding="utf-8"))
+    assert manifest["version"] == "1.0.0"
+    assert "old body" in (
+        entry.plugin_dir / "skills" / "alpha" / "SKILL.md"
+    ).read_text(encoding="utf-8")

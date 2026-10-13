@@ -475,6 +475,10 @@ def _update_one(
             changed=changed,
             staging=staging,
         )
+    except BaseException:
+        # Same window as packing: an interrupt here must not leave an unrecorded landing.
+        restore_backup(entry.plugin_dir, backup)
+        raise
 
     if not keep_staging:
         shutil.rmtree(staging, ignore_errors=True)
