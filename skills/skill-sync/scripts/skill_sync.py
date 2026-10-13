@@ -10,15 +10,18 @@ from __future__ import annotations
 import argparse
 import hashlib
 import importlib
+import json
 import os
 import shutil
 import sys
+import tarfile
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Callable, Sequence
 
 from core import registry, state
 from core.apply import ApplyFailed, apply_candidate
+from core.state import StateError
 from core.exitcodes import (
     EXIT_APPLY,
     EXIT_OK,
@@ -427,6 +430,143 @@ def _update_one(
     )
 
 
+# ---- verify -------------------------------------------------------------
+
+
+def _profile_skills(profile_dir: Path) -> dict[str, str]:
+    """``{skill name: owning bundle}`` for every bundle installed in a profile."""
+    found: dict[str, str] = {}
+    node_modules = Path(profile_dir) / "node_modules"
+    if not node_modules.is_dir():
+        return found
+    for bundle in sorted(node_modules.iterdir()):
+        skills = bundle / "skills"
+        if not bundle.is_dir() or not skills.is_dir():
+            continue
+        for skill in sorted(skills.iterdir()):
+            if (skill / "SKILL.md").is_file():
+                found[skill.name] = bundle.name
+    return found
+
+
+def _disk_skill_hashes(skills_dir: Path) -> dict[str, str]:
+    return {
+        path.relative_to(skills_dir).as_posix(): hashlib.sha256(path.read_bytes()).hexdigest()
+        for path in skills_dir.rglob("*")
+        if path.is_file()
+    }
+
+
+def _tgz_skill_hashes(artifact: Path) -> dict[str, str]:
+    hashes: dict[str, str] = {}
+    with tarfile.open(artifact) as archive:
+        for member in archive.getmembers():
+            if not member.isfile():
+                continue
+            parts = member.name.split("/")
+            if len(parts) < 3 or parts[0] != "package" or parts[1] != "skills":
+                continue
+            data = archive.extractfile(member).read()
+            hashes["/".join(parts[2:])] = hashlib.sha256(data).hexdigest()
+    return hashes
+
+
+def run_verify(
+    entries: Sequence,
+    workspace: Path | str,
+    *,
+    profile: Path | str | None = None,
+    dist_dir: Path | str | None = None,
+    stream=None,
+) -> int:
+    stream = stream if stream is not None else sys.stdout
+    workspace = Path(workspace)
+    dist = Path(dist_dir) if dist_dir is not None else default_dist_dir(workspace)
+    profile_skills = _profile_skills(Path(profile)) if profile is not None else None
+
+    lines = ["skill-sync verify", ""]
+    exit_code = EXIT_OK
+
+    for entry in entries:
+        issues: list[str] = []
+        version = ""
+
+        manifest_path = entry.plugin_dir / "package.json"
+        if not manifest_path.is_file():
+            issues.append("package.json is missing")
+        else:
+            try:
+                version = str(
+                    json.loads(manifest_path.read_text(encoding="utf-8")).get("version", "")
+                )
+            except json.JSONDecodeError:
+                issues.append("package.json is not valid JSON")
+
+        try:
+            payload = state.read(entry.plugin_dir)
+        except StateError as exc:
+            payload = None
+            issues.append(str(exc))
+
+        if payload is None:
+            issues.append("no state file: this bundle has never been synced by skill-sync")
+        else:
+            tag = str(payload.get("syncedTag") or "")
+            normalized = normalize_tag(tag, entry.tag_prefix) or tag
+            if version and normalized != version:
+                issues.append(
+                    f"version/state mismatch: package.json says {version}, state says {tag}"
+                )
+            recorded = payload.get("skills") or {}
+            skills_dir = entry.plugin_dir / "skills"
+            actual = state.compute_tree_hashes(skills_dir) if skills_dir.is_dir() else {}
+            for name in sorted(recorded):
+                if name not in actual:
+                    issues.append(f"skill missing from disk: {name}")
+                elif recorded[name].get("sha256") != actual[name]["sha256"]:
+                    issues.append(f"skill drift since the last sync: {name}")
+
+        if profile_skills is not None:
+            for name in entry.expected_skills:
+                owner = profile_skills.get(name)
+                if owner and owner != entry.package:
+                    issues.append(f"skill name {name} is also installed by {owner}")
+
+        artifact = dist / f"{entry.package}-{version}.tgz" if version else None
+        if artifact is None or not artifact.is_file():
+            issues.append(f"tarball missing from {dist}: {entry.package}-{version}.tgz")
+        else:
+            skills_dir = entry.plugin_dir / "skills"
+            shipped = _disk_skill_hashes(skills_dir) if skills_dir.is_dir() else {}
+            packed = _tgz_skill_hashes(artifact)
+            missing = sorted(set(shipped) - set(packed))
+            extra = sorted(set(packed) - set(shipped))
+            differing = sorted(
+                relative
+                for relative in set(shipped) & set(packed)
+                if shipped[relative] != packed[relative]
+            )
+            if missing or extra or differing:
+                issues.append(
+                    "tarball does not match the bundle on disk "
+                    f"(missing {len(missing)}, extra {len(extra)}, differing {len(differing)})"
+                )
+
+        if issues:
+            if exit_code == EXIT_OK:
+                exit_code = EXIT_VERIFY
+            lines.append(f"  {entry.package}  FAILED")
+            for issue in issues:
+                lines.append(f"      ! {issue}")
+        else:
+            lines.append(f"  {entry.package}  ok")
+
+    lines.append("")
+    lines.append("summary: " + ("clean" if exit_code == EXIT_OK else "problems found"))
+    print("\n".join(lines), file=stream)
+    return exit_code
+
+
 # ---- entry point --------------------------------------------------------
 
 
@@ -483,6 +623,14 @@ def main(argv: Sequence[str] | None = None) -> int:
             keep_staging=args.keep_staging,
             no_pack=args.no_pack,
         )
+
+    if args.command == "verify":
+        try:
+            selected = _select(entries, args.packages, args.all, parser)
+        except RegistryError as exc:
+            print(f"error: {exc}", file=sys.stderr)
+            return EXIT_SELFCHECK
+        return run_verify(selected, workspace, profile=args.profile)
 
     parser.error(f"command not implemented yet: {args.command}")
     return EXIT_OK
