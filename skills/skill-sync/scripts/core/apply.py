@@ -58,29 +58,24 @@ def apply_candidate(
     backup.mkdir(parents=True, exist_ok=True)
     work.mkdir(parents=True, exist_ok=True)
 
-    moved_old = False
-    installed = False
-    wrote_manifest = False
     try:
         if skills_target.exists():
             shutil.move(str(skills_target), str(backup / "skills"))
-            moved_old = True
         shutil.copy2(manifest, backup / "package.json")
+        _backup_docs(plugin_dir, backup)
         _checkpoint(fail_after, 1, fail_with)
 
         if incoming.exists():
             shutil.rmtree(incoming, ignore_errors=True)
         shutil.copytree(staging_skills, incoming)
         shutil.move(str(incoming), str(skills_target))
-        installed = True
         _checkpoint(fail_after, 2, fail_with)
 
         previous_version = _bump_manifest(manifest, version)
-        wrote_manifest = True
         _bump_docs(plugin_dir, previous_version, version)
         _checkpoint(fail_after, 3, fail_with)
     except BaseException as exc:  # noqa: BLE001 - interrupts must roll back too
-        _rollback(plugin_dir, backup, moved_old, wrote_manifest, installed, incoming)
+        _rollback(plugin_dir, backup, incoming)
         if isinstance(exc, Exception):
             raise ApplyFailed(f"{plugin_dir}: {exc}") from exc
         raise
@@ -108,6 +103,10 @@ def _bump_manifest(manifest: Path, version: str) -> str:
     previous = str(payload.get("version", ""))
     if not previous:
         raise ApplyFailed(f"{manifest}: no version field to replace")
+    if previous == version:
+        # A rebuild of the same version has nothing to rewrite, so it must not fail
+        # on a manifest whose formatting the textual marker does not match.
+        return previous
 
     marker = f'"version": "{previous}"'
     if marker not in text:
@@ -148,24 +147,37 @@ def _bump_docs(plugin_dir: Path, previous: str, version: str) -> None:
         path.write_bytes(payload)
 
 
-def _rollback(
-    plugin_dir: Path,
-    backup: Path,
-    moved_old: bool,
-    wrote_manifest: bool,
-    installed: bool,
-    incoming: Path,
-) -> None:
+def _backup_docs(plugin_dir: Path, backup: Path) -> None:
+    """The docs name the version the bundle was built from, so they roll back too."""
+    for name in DOC_NAMES:
+        path = plugin_dir / name
+        if path.is_file():
+            shutil.copy2(path, backup / name)
+
+
+def restore_backup(plugin_dir: Path | str, backup: Path | str, *, drop: bool = True) -> None:
+    """Put a backed-up bundle back: skills, manifest and the docs that cite its version.
+
+    Called both by the rollback here and by the caller when a *later* step (packing)
+    fails, so a failed landing never leaves a doc advertising a version it rolled back.
+    """
+    plugin_dir = Path(plugin_dir)
+    backup = Path(backup)
     skills_target = plugin_dir / "skills"
-    manifest = plugin_dir / "package.json"
-    try:
-        if incoming.exists():
-            shutil.rmtree(incoming, ignore_errors=True)
-        if installed and skills_target.exists():
+    if (backup / "skills").is_dir():
+        if skills_target.exists():
             shutil.rmtree(skills_target, ignore_errors=True)
-        if moved_old and (backup / "skills").is_dir() and not skills_target.exists():
-            shutil.move(str(backup / "skills"), str(skills_target))
-        if wrote_manifest and (backup / "package.json").is_file():
-            shutil.copy2(backup / "package.json", manifest)
-    finally:
+        shutil.move(str(backup / "skills"), str(skills_target))
+    if (backup / "package.json").is_file():
+        shutil.copy2(backup / "package.json", plugin_dir / "package.json")
+    for name in DOC_NAMES:
+        if (backup / name).is_file():
+            shutil.copy2(backup / name, plugin_dir / name)
+    if drop:
         shutil.rmtree(backup, ignore_errors=True)
+
+
+def _rollback(plugin_dir: Path, backup: Path, incoming: Path) -> None:
+    if incoming.exists():
+        shutil.rmtree(incoming, ignore_errors=True)
+    restore_backup(plugin_dir, backup, drop=True)

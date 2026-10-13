@@ -6,7 +6,7 @@ problem at once; ``blocking()`` then selects the issues that stop a landing, and
 the caller decides which codes it is willing to ignore (``--accept-structure-change``
 maps to ``structure-changed``).
 
-Rules, in the order the design spec lists them:
+Rules, in the order they run here:
 
 1. every skill directory has a ``SKILL.md`` whose frontmatter ``name`` matches the
    directory and is kebab-case;

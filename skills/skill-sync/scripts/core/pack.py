@@ -35,6 +35,28 @@ def pack(
     dist_dir = Path(dist_dir)
     _strip_build_junk(plugin_dir)
 
+    if not Path(npm_path).is_file():
+        raise PackFailed(
+            f"npm executable not found: {npm_path} - install Node.js or point NPM_DEFAULT_PATH at it"
+        )
+
+    try:
+        return _pack(plugin_dir, dist_dir, str(npm_path), runner, cache_dir)
+    except PackFailed:
+        raise
+    except OSError as exc:
+        # A locked artifact, an unwritable dist directory or a missing npm must all
+        # arrive as one failure type, so the caller can roll back and report code 6.
+        raise PackFailed(f"packing {plugin_dir} failed: {type(exc).__name__}: {exc}") from exc
+
+
+def _pack(
+    plugin_dir: Path,
+    dist_dir: Path,
+    npm_path: str,
+    runner: Runner | None,
+    cache_dir: Path | str | None,
+) -> Path:
     manifest_path = plugin_dir / "package.json"
     if not manifest_path.is_file():
         raise PackFailed(f"{plugin_dir}: no package.json to pack")

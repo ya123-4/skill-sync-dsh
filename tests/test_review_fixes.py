@@ -397,3 +397,143 @@ def test_apply_rolls_back_when_the_docs_step_fails(scratch):
     assert "old body" in (
         entry.plugin_dir / "skills" / "alpha" / "SKILL.md"
     ).read_text(encoding="utf-8")
+
+
+# ---- round 2, I-1: the docs belong to the transaction too ----
+
+
+def _staged(scratch) -> Path:
+    staging = scratch / "staging" / "skills" / "alpha"
+    staging.mkdir(parents=True, exist_ok=True)
+    (staging / "SKILL.md").write_text(
+        "---\nname: alpha\ndescription: new\n---\n\nnew body\n", encoding="utf-8"
+    )
+    return scratch / "staging" / "skills"
+
+
+def test_apply_rolls_the_docs_back_when_a_later_step_fails(scratch):
+    entry = make_entry(scratch, version="1.0.0")
+    (entry.plugin_dir / "README.md").write_text("Bundle for v1.0.0.\n", encoding="utf-8")
+
+    with pytest.raises(ApplyFailed):
+        apply_candidate(entry.plugin_dir, _staged(scratch), "2.0.0", fail_after=3)
+
+    assert "v1.0.0" in (entry.plugin_dir / "README.md").read_text(encoding="utf-8")
+
+
+def test_pack_failure_rolls_the_docs_back_too(scratch, dist):
+    entry = make_entry(scratch)
+    (entry.plugin_dir / "README.md").write_text("Bundle for v1.0.0.\n", encoding="utf-8")
+    (entry.plugin_dir / "THIRD_PARTY_NOTICES.md").write_text(
+        "Upstream version: 1.0.0\n", encoding="utf-8"
+    )
+    upstream = make_upstream(scratch, body="new body")
+
+    code = run_update(
+        [entry],
+        FakeClient(status="update_available", tag="v2.0.0"),
+        scratch,
+        upstream_provider=provider(upstream),
+        dist_dir=dist,
+        pack_runner=fake_pack_runner(returncode=1),
+        stream=io.StringIO(),
+    )
+
+    assert code == 6
+    assert "v1.0.0" in (entry.plugin_dir / "README.md").read_text(encoding="utf-8")
+    assert "1.0.0" in (entry.plugin_dir / "THIRD_PARTY_NOTICES.md").read_text(
+        encoding="utf-8"
+    )
+
+
+# ---- round 2, I-2: a pack error that is not a PackFailed must still roll back ----
+
+
+def test_pack_reports_a_missing_npm_as_a_pack_failure(scratch):
+    entry = make_entry(scratch)
+    with pytest.raises(PackFailed):
+        pack(
+            entry.plugin_dir,
+            scratch / "dist",
+            npm_path=str(scratch / "definitely-not-npm.cmd"),
+            runner=fake_pack_runner(),
+        )
+
+
+def test_update_maps_an_unexpected_pack_error_to_code_6_and_rolls_back(scratch, dist):
+    entry = make_entry(scratch)
+    (entry.plugin_dir / "README.md").write_text("Bundle for v1.0.0.\n", encoding="utf-8")
+    upstream = make_upstream(scratch, body="new body")
+
+    def exploding_runner(argv, env):
+        raise FileNotFoundError("npm is not where pack.py thinks it is")
+
+    code = run_update(
+        [entry],
+        FakeClient(status="update_available", tag="v2.0.0"),
+        scratch,
+        upstream_provider=provider(upstream),
+        dist_dir=dist,
+        pack_runner=exploding_runner,
+        stream=io.StringIO(),
+    )
+
+    assert code == 6
+    manifest = json.loads((entry.plugin_dir / "package.json").read_text(encoding="utf-8"))
+    assert manifest["version"] == "1.0.0"
+    assert "v1.0.0" in (entry.plugin_dir / "README.md").read_text(encoding="utf-8")
+    assert not (entry.plugin_dir / ".skill-sync-state.json").exists()
+
+
+# ---- round 2, M-4: a rebuild that needs no version rewrite is a no-op, not a failure ----
+
+
+def test_rebuild_with_a_reformatted_manifest_is_a_no_op(scratch, dist):
+    entry = make_entry(scratch, version="1.0.0")
+    (entry.plugin_dir / "package.json").write_text(
+        '{"name": "demo-skill-dsh","version":"1.0.0","description":"demo 1.0.0"}',
+        encoding="utf-8",
+    )
+    upstream = make_upstream(scratch, body="rebuilt body")
+
+    code = run_update(
+        [entry],
+        FakeClient(status=STATUS_UP_TO_DATE, tag="v1.0.0"),
+        scratch,
+        upstream_provider=provider(upstream),
+        dist_dir=dist,
+        rebuild=True,
+        pack_runner=fake_pack_runner(),
+        stream=io.StringIO(),
+    )
+
+    assert code == 0
+    assert "rebuilt body" in (
+        entry.plugin_dir / "skills" / "alpha" / "SKILL.md"
+    ).read_text(encoding="utf-8")
+
+
+# ---- round 2, M-1: a corrupt tarball is a verification failure, with a report ----
+
+
+def test_verify_reports_a_corrupt_tarball_as_a_verification_failure(scratch):
+    entry = make_entry(scratch)
+    state.write(
+        entry.plugin_dir,
+        {
+            "package": entry.package,
+            "upstream": entry.repo,
+            "syncedTag": "v1.0.0",
+            "syncedCommit": None,
+            "skills": state.compute_tree_hashes(entry.plugin_dir / "skills"),
+        },
+    )
+    dist = scratch / "dist"
+    dist.mkdir()
+    (dist / f"{entry.package}-1.0.0.tgz").write_bytes(b"this is not a tarball")
+
+    stream = io.StringIO()
+    code = run_verify([entry], scratch, dist_dir=dist, stream=stream)
+
+    assert code == 5
+    assert "demo-skill-dsh" in stream.getvalue()

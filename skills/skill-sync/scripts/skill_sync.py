@@ -21,7 +21,7 @@ from pathlib import Path
 from typing import Callable, Sequence
 
 from core import registry, state
-from core.apply import ApplyFailed, apply_candidate
+from core.apply import ApplyFailed, apply_candidate, restore_backup
 from core.state import StateError
 from core.exitcodes import (
     EXIT_APPLY,
@@ -189,18 +189,6 @@ def _diff_skills(previous: Path, candidate: Path):
         tuple(sorted(before_skills - after_skills)),
         tuple(changed),
     )
-
-
-def _restore_backup(plugin_dir: Path, backup: Path) -> None:
-    """Undo a landed candidate, then drop the backup so nothing is left behind."""
-    skills = plugin_dir / "skills"
-    if (backup / "skills").is_dir():
-        if skills.exists():
-            shutil.rmtree(skills, ignore_errors=True)
-        shutil.move(str(backup / "skills"), str(skills))
-    if (backup / "package.json").is_file():
-        shutil.copy2(backup / "package.json", plugin_dir / "package.json")
-    shutil.rmtree(backup, ignore_errors=True)
 
 
 # ---- check --------------------------------------------------------------
@@ -437,12 +425,12 @@ def _update_one(
     if not no_pack:
         try:
             artifact = pack(entry.plugin_dir, dist, runner=pack_runner)
-        except PackFailed as exc:
-            _restore_backup(entry.plugin_dir, backup)
+        except Exception as exc:  # noqa: BLE001 - any pack failure rolls the landing back
+            restore_backup(entry.plugin_dir, backup)
             return UpdateRow(
                 entry.package,
                 "failed",
-                str(exc),
+                f"packing failed: {type(exc).__name__}: {exc}",
                 code=EXIT_PACK,
                 added=added,
                 removed=removed,
@@ -518,6 +506,76 @@ def _tgz_skill_hashes(artifact: Path) -> dict[str, str]:
     return hashes
 
 
+def _verify_entry(entry, dist: Path, profile_skills: dict | None) -> list[str]:
+    """Everything that can be checked about one bundle without the network."""
+    issues: list[str] = []
+    version = ""
+
+    manifest_path = entry.plugin_dir / "package.json"
+    if not manifest_path.is_file():
+        issues.append("package.json is missing")
+    else:
+        try:
+            version = str(
+                json.loads(manifest_path.read_text(encoding="utf-8")).get("version", "")
+            )
+        except json.JSONDecodeError:
+            issues.append("package.json is not valid JSON")
+
+    try:
+        payload = state.read(entry.plugin_dir)
+    except StateError as exc:
+        payload = None
+        issues.append(str(exc))
+
+    if payload is None:
+        issues.append("no state file: this bundle has never been synced by skill-sync")
+    else:
+        tag = str(payload.get("syncedTag") or "")
+        normalized = normalize_tag(tag, entry.tag_prefix) or tag
+        if version and normalized != version:
+            issues.append(
+                f"version/state mismatch: package.json says {version}, state says {tag}"
+            )
+        recorded = payload.get("skills") or {}
+        skills_dir = entry.plugin_dir / "skills"
+        actual = state.compute_tree_hashes(skills_dir) if skills_dir.is_dir() else {}
+        for name in sorted(recorded):
+            if name not in actual:
+                issues.append(f"skill missing from disk: {name}")
+            elif recorded[name].get("sha256") != actual[name]["sha256"]:
+                issues.append(f"skill drift since the last sync: {name}")
+        for name in sorted(set(actual) - set(recorded)):
+            issues.append(f"skill present on disk but not in the state file: {name}")
+
+    if profile_skills is not None:
+        for name in entry.expected_skills:
+            owner = profile_skills.get(name)
+            if owner and owner != entry.package:
+                issues.append(f"skill name {name} is also installed by {owner}")
+
+    artifact = dist / f"{entry.package}-{version}.tgz" if version else None
+    if artifact is None or not artifact.is_file():
+        issues.append(f"tarball missing from {dist}: {entry.package}-{version}.tgz")
+    else:
+        skills_dir = entry.plugin_dir / "skills"
+        shipped = _disk_skill_hashes(skills_dir) if skills_dir.is_dir() else {}
+        packed = _tgz_skill_hashes(artifact)
+        missing = sorted(set(shipped) - set(packed))
+        extra = sorted(set(packed) - set(shipped))
+        differing = sorted(
+            relative
+            for relative in set(shipped) & set(packed)
+            if shipped[relative] != packed[relative]
+        )
+        if missing or extra or differing:
+            issues.append(
+                "tarball does not match the bundle on disk "
+                f"(missing {len(missing)}, extra {len(extra)}, differing {len(differing)})"
+            )
+    return issues
+
+
 def run_verify(
     entries: Sequence,
     workspace: Path | str,
@@ -535,71 +593,10 @@ def run_verify(
     exit_code = EXIT_OK
 
     for entry in entries:
-        issues: list[str] = []
-        version = ""
-
-        manifest_path = entry.plugin_dir / "package.json"
-        if not manifest_path.is_file():
-            issues.append("package.json is missing")
-        else:
-            try:
-                version = str(
-                    json.loads(manifest_path.read_text(encoding="utf-8")).get("version", "")
-                )
-            except json.JSONDecodeError:
-                issues.append("package.json is not valid JSON")
-
         try:
-            payload = state.read(entry.plugin_dir)
-        except StateError as exc:
-            payload = None
-            issues.append(str(exc))
-
-        if payload is None:
-            issues.append("no state file: this bundle has never been synced by skill-sync")
-        else:
-            tag = str(payload.get("syncedTag") or "")
-            normalized = normalize_tag(tag, entry.tag_prefix) or tag
-            if version and normalized != version:
-                issues.append(
-                    f"version/state mismatch: package.json says {version}, state says {tag}"
-                )
-            recorded = payload.get("skills") or {}
-            skills_dir = entry.plugin_dir / "skills"
-            actual = state.compute_tree_hashes(skills_dir) if skills_dir.is_dir() else {}
-            for name in sorted(recorded):
-                if name not in actual:
-                    issues.append(f"skill missing from disk: {name}")
-                elif recorded[name].get("sha256") != actual[name]["sha256"]:
-                    issues.append(f"skill drift since the last sync: {name}")
-            for name in sorted(set(actual) - set(recorded)):
-                issues.append(f"skill present on disk but not in the state file: {name}")
-
-        if profile_skills is not None:
-            for name in entry.expected_skills:
-                owner = profile_skills.get(name)
-                if owner and owner != entry.package:
-                    issues.append(f"skill name {name} is also installed by {owner}")
-
-        artifact = dist / f"{entry.package}-{version}.tgz" if version else None
-        if artifact is None or not artifact.is_file():
-            issues.append(f"tarball missing from {dist}: {entry.package}-{version}.tgz")
-        else:
-            skills_dir = entry.plugin_dir / "skills"
-            shipped = _disk_skill_hashes(skills_dir) if skills_dir.is_dir() else {}
-            packed = _tgz_skill_hashes(artifact)
-            missing = sorted(set(shipped) - set(packed))
-            extra = sorted(set(packed) - set(shipped))
-            differing = sorted(
-                relative
-                for relative in set(shipped) & set(packed)
-                if shipped[relative] != packed[relative]
-            )
-            if missing or extra or differing:
-                issues.append(
-                    "tarball does not match the bundle on disk "
-                    f"(missing {len(missing)}, extra {len(extra)}, differing {len(differing)})"
-                )
+            issues = _verify_entry(entry, dist, profile_skills)
+        except Exception as exc:  # noqa: BLE001 - a broken artefact is a failed verification
+            issues = [f"internal error while verifying: {type(exc).__name__}: {exc}"]
 
         if issues:
             if exit_code == EXIT_OK:
@@ -638,11 +635,12 @@ def _select(entries, packages, want_all: bool, parser):
 
 
 def main(argv: Sequence[str] | None = None) -> int:
-    """Entry point that guarantees one of the documented exit codes.
+    """Entry point that maps failures onto the documented exit codes.
 
-    The seven codes are a contract a caller reasons about, so an unmapped
-    exception is reported as code 2 with its traceback rather than escaping as an
-    interpreter failure with code 1.
+    At process level every path returns one of the seven codes (or the 2 argparse
+    exits with), so an unmapped exception is reported as code 2 with its traceback
+    rather than escaping as an interpreter failure. A programmatic caller must
+    still handle the ``SystemExit`` that argument errors raise.
     """
     parser = build_parser()
     args = parser.parse_args(argv)
@@ -657,8 +655,9 @@ def main(argv: Sequence[str] | None = None) -> int:
     except Exception as exc:  # noqa: BLE001 - contract: never exit outside 0/2/3/4/5/6/7
         print(f"error: unexpected {type(exc).__name__}: {exc}", file=sys.stderr)
         print(
-            "hint: this is outside the documented exit codes; re-run with --workspace or "
-            "report it with the traceback below",
+            "hint: this is outside the documented exit codes. If it looks like a workspace "
+            "problem, note that --workspace is a global option and must come *before* the "
+            "subcommand; otherwise report it with the traceback below.",
             file=sys.stderr,
         )
         traceback.print_exc()
