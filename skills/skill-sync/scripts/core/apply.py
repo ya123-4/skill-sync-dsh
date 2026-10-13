@@ -76,8 +76,8 @@ def apply_candidate(
         _checkpoint(fail_after, 2, fail_with)
 
         previous_version = _bump_manifest(manifest, version)
-        _bump_docs(plugin_dir, previous_version, version)
         wrote_manifest = True
+        _bump_docs(plugin_dir, previous_version, version)
         _checkpoint(fail_after, 3, fail_with)
     except BaseException as exc:  # noqa: BLE001 - interrupts must roll back too
         _rollback(plugin_dir, backup, moved_old, wrote_manifest, installed, incoming)
@@ -128,9 +128,14 @@ def _bump_manifest(manifest: Path, version: str) -> str:
 
 
 def _bump_docs(plugin_dir: Path, previous: str, version: str) -> None:
-    """Update the version references the bundle's own docs carry."""
+    """Update the version references the bundle's own docs carry.
+
+    Two phases on purpose: every doc is decoded and rewritten in memory first, so
+    an undecodable or unreadable file aborts before any doc on disk changes.
+    """
     if not previous or previous == version:
         return
+    pending: list[tuple[Path, bytes]] = []
     for name in DOC_NAMES:
         path = plugin_dir / name
         if not path.is_file():
@@ -138,7 +143,9 @@ def _bump_docs(plugin_dir: Path, previous: str, version: str) -> None:
         text = path.read_text(encoding="utf-8")
         updated = text.replace(previous, version)
         if updated != text:
-            path.write_bytes(updated.encode("utf-8"))
+            pending.append((path, updated.encode("utf-8")))
+    for path, payload in pending:
+        path.write_bytes(payload)
 
 
 def _rollback(

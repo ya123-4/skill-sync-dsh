@@ -369,3 +369,31 @@ def test_verify_reports_a_skill_directory_added_by_hand(scratch):
 
     assert code == 5
     assert "handmade" in stream.getvalue()
+
+
+# ---- round 2, finding 1: a failure after the version write must still roll back ----
+
+
+def test_apply_rolls_back_when_the_docs_step_fails(scratch):
+    """The manifest is written before `wrote_manifest` used to be set, and the doc
+    pass may raise (an undecodable README). Both must leave version 1.0.0 behind."""
+    entry = make_entry(scratch, version="1.0.0")
+    (entry.plugin_dir / "README.md").write_text("Bundle for demo v1.0.0.\n", encoding="utf-8")
+    (entry.plugin_dir / "README.zh.md").write_bytes(b"\xff\xfe not utf-8 at all")
+    staging = scratch / "staging" / "skills" / "alpha"
+    staging.mkdir(parents=True)
+    (staging / "SKILL.md").write_text(
+        "---\nname: alpha\ndescription: new\n---\n\nnew body\n", encoding="utf-8"
+    )
+
+    with pytest.raises(ApplyFailed):
+        apply_candidate(entry.plugin_dir, scratch / "staging" / "skills", "2.0.0")
+
+    manifest = json.loads((entry.plugin_dir / "package.json").read_text(encoding="utf-8"))
+    assert manifest["version"] == "1.0.0"
+    # the decodable doc must not have been half-updated either
+    assert "v1.0.0" in (entry.plugin_dir / "README.md").read_text(encoding="utf-8")
+    # and the tree itself is back
+    assert "old body" in (
+        entry.plugin_dir / "skills" / "alpha" / "SKILL.md"
+    ).read_text(encoding="utf-8")
