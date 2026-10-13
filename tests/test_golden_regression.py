@@ -35,7 +35,12 @@ def installed_version(entry) -> str:
 
 
 def pinned_ref(entry) -> str:
-    return f"{entry.tag_prefix}{installed_version(entry)}"
+    """The upstream revision the installed bytes came from.
+
+    Normally the tag matching the bundle's own version; for a bundle built from a
+    mid-branch snapshot (see KNOWN_DEVIATIONS.md) the recorded commit instead.
+    """
+    return entry.baseline_commit or f"{entry.tag_prefix}{installed_version(entry)}"
 
 
 def snapshot_for(entry) -> Path:
@@ -158,3 +163,66 @@ def test_agent_browser_missing_skill_data_reports_structure_change(scratch):
 
     with pytest.raises(StructureChanged):
         assemble(context)
+
+
+def test_mattpocock_golden(scratch):
+    from recipes.mattpocock import assemble
+
+    entry = registry_entry("mattpocock-skills-dsh")
+    staging = scratch / "staging"
+    staging.mkdir()
+
+    result = assemble(context_for(entry, staging))
+
+    assert sorted(result.skills) == sorted(entry.expected_skills)
+    assert result.manual_skills == []
+    assert_tree_identical(staging / "skills", entry.plugin_dir / "skills")
+
+
+def test_mattpocock_whitelist_and_flattening(scratch):
+    from recipes.mattpocock import assemble
+
+    entry = registry_entry("mattpocock-skills-dsh")
+    upstream = scratch / "upstream"
+    staging = scratch / "staging"
+    staging.mkdir()
+    _write_fake_mattpocock_upstream(upstream)
+
+    result = assemble(
+        RecipeContext(
+            upstream_dir=upstream,
+            upstream_ref="v9.9.9",
+            plugin_dir=entry.plugin_dir,
+            staging_dir=staging,
+            entry=entry,
+        )
+    )
+
+    # only the skills listed in .claude-plugin/plugin.json ship, flattened one level
+    assert result.skills == ["alpha"]
+    assert (staging / "skills" / "alpha" / "SKILL.md").is_file()
+    assert not (staging / "skills" / "engineering").exists()
+    assert not (staging / "skills" / "beta").exists()
+
+
+def test_mattpocock_prose_normalization():
+    from recipes.mattpocock import normalize_prose
+
+    assert normalize_prose("Use the Skill tool first.", {"tdd"}) == "Use the `skill` tool first."
+    assert normalize_prose("Run `/tdd` now.", {"tdd"}) == "Run `tdd` now."
+    assert normalize_prose("a `/not-a-skill` ref", {"tdd"}) == "a `/not-a-skill` ref"
+
+
+def _write_fake_mattpocock_upstream(upstream: Path) -> None:
+    (upstream / ".claude-plugin").mkdir(parents=True)
+    (upstream / ".claude-plugin" / "plugin.json").write_text(
+        json.dumps({"version": "9.9.9", "skills": ["./skills/engineering/alpha"]}),
+        encoding="utf-8",
+    )
+    for group, name in (("engineering", "alpha"), ("engineering", "beta")):
+        skill = upstream / "skills" / group / name
+        skill.mkdir(parents=True)
+        (skill / "SKILL.md").write_text(
+            f"---\nname: {name}\ndescription: x\n---\n\nUse the Skill tool.\n",
+            encoding="utf-8",
+        )

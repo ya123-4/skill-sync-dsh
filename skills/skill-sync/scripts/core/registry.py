@@ -36,6 +36,7 @@ class Entry:
     commit_pinned: bool
     license: str
     notes: str
+    baseline_commit: str | None = None
 
     def upstream_skill_name(self, local_name: str) -> str:
         """Map a produced skill directory name back to its upstream name."""
@@ -133,4 +134,5 @@ def _build_entry(item: dict, workspace: Path) -> Entry:
         commit_pinned=bool(item.get("commitPinned", False)),
         license=item.get("license", "unknown"),
         notes=item.get("notes", ""),
+        baseline_commit=item.get("baselineCommit"),
     )

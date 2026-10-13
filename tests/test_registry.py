@@ -48,6 +48,19 @@ def test_open_design_entry_is_commit_pinned(registry):
     assert entry.tag_prefix == "open-design-v"
 
 
+def test_mattpocock_is_pinned_to_a_content_commit(registry):
+    """The 1.3.1 bundle came from main, not from tag v1.3.1 (see KNOWN_DEVIATIONS.md)."""
+    entry = by_package(registry, "mattpocock-skills-dsh")
+    assert entry.baseline_commit == "49dd158d1076134a641b33efb035946536778336"
+    assert entry.commit_pinned is True
+
+
+def test_only_mattpocock_carries_a_content_commit(registry):
+    for entry in registry:
+        if entry.package != "mattpocock-skills-dsh":
+            assert entry.baseline_commit is None, entry.package
+
+
 def test_expected_skills_match_what_is_installed(registry):
     for entry in registry:
         on_disk = {path.name for path in (entry.plugin_dir / "skills").iterdir() if path.is_dir()}

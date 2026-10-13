@@ -118,8 +118,10 @@
         "writing-for-agents"
       ],
       "manualSkills": [],
+      "commitPinned": true,
+      "baselineCommit": "49dd158d1076134a641b33efb035946536778336",
       "license": "MIT",
-      "notes": "The shipped set is exactly .claude-plugin/plugin.json's skills[]; upstream groups are flattened one level and two Claude-Code wordings are normalised for DSH."
+      "notes": "The shipped set is exactly .claude-plugin/plugin.json's skills[]; upstream groups are flattened one level and two Claude-Code wordings are normalised for DSH. The installed bytes came from main at commit 49dd158d, 45 commits past tag v1.3.1 - see KNOWN_DEVIATIONS.md."
     },
     {
       "package": "open-design-skills-dsh",
