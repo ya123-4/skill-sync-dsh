@@ -450,14 +450,10 @@ def test_pack_failure_rolls_the_docs_back_too(scratch, dist):
 
 
 def test_pack_reports_a_missing_npm_as_a_pack_failure(scratch):
+    """The default runner must surface a missing npm as PackFailed, not FileNotFoundError."""
     entry = make_entry(scratch)
     with pytest.raises(PackFailed):
-        pack(
-            entry.plugin_dir,
-            scratch / "dist",
-            npm_path=str(scratch / "definitely-not-npm.cmd"),
-            runner=fake_pack_runner(),
-        )
+        pack(entry.plugin_dir, scratch / "dist", npm_path=str(scratch / "definitely-not-npm.cmd"))
 
 
 def test_update_maps_an_unexpected_pack_error_to_code_6_and_rolls_back(scratch, dist):

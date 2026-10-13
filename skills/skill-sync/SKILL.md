@@ -33,7 +33,9 @@ python dsh-plugin-build\skill-sync-dsh\skills\skill-sync\scripts\skill_sync.py v
 **`check`** is read-only and needs one or two GitHub API calls per bundle. Each row is
 `up to date`, `update available (local -> remote)`, or `unknown (reason)`. Rows for bundles
 that ship a *manual* skill (hand-written, not copied from upstream) carry a note: that part
-can never be updated automatically.
+can never be updated automatically. If **no** bundle could be compared at all (rate limit,
+offline with a cold cache), `check` exits `3` instead of `0` — a report that concluded
+nothing is not a pass.
 
 **`update`** downloads the pinned upstream snapshot, runs that bundle's recipe into a
 staging directory, verifies the result, and only then lands it: the old `skills/` and

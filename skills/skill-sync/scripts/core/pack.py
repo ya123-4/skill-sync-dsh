@@ -35,11 +35,9 @@ def pack(
     dist_dir = Path(dist_dir)
     _strip_build_junk(plugin_dir)
 
-    if not Path(npm_path).is_file():
-        raise PackFailed(
-            f"npm executable not found: {npm_path} - install Node.js or point NPM_DEFAULT_PATH at it"
-        )
-
+    # A missing npm is deliberately *not* checked here: that check would also fire
+    # for callers injecting their own runner, and `subprocess.run` already raises an
+    # OSError that the handler below turns into PackFailed.
     try:
         return _pack(plugin_dir, dist_dir, str(npm_path), runner, cache_dir)
     except PackFailed:

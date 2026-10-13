@@ -86,9 +86,10 @@ def test_check_json_shape(three_entries):
     assert payload[0]["remote"] == "v2.0.0"
 
 
-def test_check_exit_code_is_zero_even_when_everything_is_unknown(three_entries):
+def test_check_exit_code_is_three_when_nothing_could_be_compared(three_entries):
+    """A run that produced no comparison at all is an upstream failure, not a pass."""
     client = GithubClient(http=routing_http({}, failure_status=403), cache_dir=None)
-    assert run_check(three_entries, client, stream=io.StringIO()) == 0
+    assert run_check(three_entries, client, stream=io.StringIO()) == 3
 
 
 def test_check_offline_without_cache_marks_unknown(three_entries):

@@ -51,7 +51,9 @@ def apply_candidate(
 
     stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
     work = plugin_dir / WORK_DIRNAME
-    backup = Path(backup_root) if backup_root is not None else work / "backup" / stamp
+    backup = (
+        Path(backup_root) if backup_root is not None else _unique_dir(work / "backup", stamp)
+    )
     incoming = work / f"incoming-{stamp}"
     skills_target = plugin_dir / "skills"
 
@@ -81,6 +83,20 @@ def apply_candidate(
         raise
 
     return backup
+
+
+def _unique_dir(parent: Path, stem: str) -> Path:
+    """A directory path that does not exist yet.
+
+    The stamp has one-second resolution; a second landing within the same second
+    used to move the old tree *into* the first backup (``backup/skills/skills``).
+    """
+    candidate = parent / stem
+    index = 2
+    while candidate.exists():
+        candidate = parent / f"{stem}-{index}"
+        index += 1
+    return candidate
 
 
 def _checkpoint(fail_after: int | None, step: int, fail_with: type[BaseException]) -> None:

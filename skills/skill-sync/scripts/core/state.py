@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 from pathlib import Path
 
 STATE_FILENAME = ".skill-sync-state.json"
@@ -41,7 +42,12 @@ def read(plugin_dir: Path | str) -> dict | None:
 def write(plugin_dir: Path | str, payload: dict) -> Path:
     path = state_path(plugin_dir)
     document = {"schema": STATE_SCHEMA, **payload}
-    path.write_bytes((json.dumps(document, indent=2, ensure_ascii=False) + "\n").encode("utf-8"))
+    data = (json.dumps(document, indent=2, ensure_ascii=False) + "\n").encode("utf-8")
+    # Write beside the target and swap it in: a failure part-way through cannot
+    # truncate the record of the previous sync.
+    temporary = path.with_name(path.name + ".tmp")
+    temporary.write_bytes(data)
+    os.replace(temporary, path)
     return path
 
 

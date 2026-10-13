@@ -36,10 +36,12 @@ from core.pack import PackFailed, pack
 from core.registry import RegistryError, resolve_workspace
 from core.report import CheckRow, UpdateRow, render_check, render_update
 from core.upstream import (
+    STATUS_UNKNOWN,
     STATUS_UP_TO_DATE,
     STATUS_UPDATE_AVAILABLE,
     GithubClient,
     SnapshotError,
+    UpstreamError,
     fetch_snapshot,
     local_version,
 )
@@ -204,9 +206,9 @@ def run_check(
     stream = stream if stream is not None else sys.stdout
     rows: list[CheckRow] = []
     for entry in entries:
-        info = client.latest(entry)
-        rows.append(
-            CheckRow(
+        try:
+            info = client.latest(entry)
+            row = CheckRow(
                 package=entry.package,
                 local=local_version(entry),
                 remote=info.tag,
@@ -214,8 +216,22 @@ def run_check(
                 reason=info.reason,
                 manual_skills=entry.manual_skills,
             )
-        )
+        except Exception as exc:  # noqa: BLE001 - one bad lookup must not lose the table
+            row = CheckRow(
+                package=entry.package,
+                local="?",
+                remote=None,
+                status=STATUS_UNKNOWN,
+                reason=f"{type(exc).__name__}: {exc}",
+                manual_skills=entry.manual_skills,
+            )
+        rows.append(row)
     print(render_check(rows, as_json=as_json), file=stream)
+
+    # A run that compared nothing at all is an upstream failure, not a pass;
+    # otherwise the documented code 3 would be unreachable for `check`.
+    if rows and all(row.status == STATUS_UNKNOWN for row in rows):
+        return EXIT_UPSTREAM
     return EXIT_OK
 
 
@@ -266,6 +282,11 @@ def run_update(
                 pack_runner=pack_runner,
                 profile_skills=profile_skills,
             )
+        except UpstreamError as exc:
+            # A user-actionable upstream problem, not a defect in this tool.
+            row = UpdateRow(
+                entry.package, "failed", f"upstream error: {exc}", code=EXIT_UPSTREAM
+            )
         except Exception as exc:  # noqa: BLE001 - one broken bundle must not lose the batch
             row = UpdateRow(
                 entry.package,
@@ -273,12 +294,22 @@ def run_update(
                 f"internal error: {type(exc).__name__}: {exc}",
                 code=EXIT_SELFCHECK,
             )
+            traceback.print_exc()
         rows.append(row)
         if row.code and exit_code == EXIT_OK:
             exit_code = row.code
 
     print(render_update(rows), file=stream)
     return exit_code
+
+
+def _rollback_detail(plugin_dir: Path, backup: Path) -> str:
+    """Roll back and describe any failure to do so, never hiding the original error."""
+    try:
+        restore_backup(plugin_dir, backup)
+    except Exception as exc:  # noqa: BLE001 - the original failure is the one that matters
+        return f" | rollback also failed: {type(exc).__name__}: {exc}"
+    return ""
 
 
 def _update_one(
@@ -434,11 +465,12 @@ def _update_one(
         try:
             artifact = pack(entry.plugin_dir, dist, runner=pack_runner)
         except Exception as exc:  # noqa: BLE001 - any pack failure rolls the landing back
-            restore_backup(entry.plugin_dir, backup)
+            detail = f"packing failed: {type(exc).__name__}: {exc}"
+            detail += _rollback_detail(entry.plugin_dir, backup)
             return UpdateRow(
                 entry.package,
                 "failed",
-                f"packing failed: {type(exc).__name__}: {exc}",
+                detail,
                 code=EXIT_PACK,
                 added=added,
                 removed=removed,
@@ -447,7 +479,10 @@ def _update_one(
             )
         except BaseException:
             # An interrupt during packing must roll the landing back before it propagates.
-            restore_backup(entry.plugin_dir, backup)
+            try:
+                restore_backup(entry.plugin_dir, backup)
+            except Exception:  # noqa: BLE001 - the interrupt is what must propagate
+                pass
             raise
 
     try:
@@ -464,11 +499,19 @@ def _update_one(
             },
         )
     except Exception as exc:  # noqa: BLE001 - a landing without its record is not a landing
-        restore_backup(entry.plugin_dir, backup)
+        detail = f"cannot write the state file: {type(exc).__name__}: {exc}"
+        if artifact is not None:
+            # The tarball belongs to a landing that is being rolled back; leaving it
+            # in dist/ would advertise a version this bundle does not contain.
+            try:
+                artifact.unlink()
+            except OSError as cleanup_exc:
+                detail += f" | orphan tarball left behind: {cleanup_exc}"
+        detail += _rollback_detail(entry.plugin_dir, backup)
         return UpdateRow(
             entry.package,
             "failed",
-            f"cannot write the state file: {type(exc).__name__}: {exc}",
+            detail,
             code=EXIT_APPLY,
             added=added,
             removed=removed,
@@ -477,7 +520,10 @@ def _update_one(
         )
     except BaseException:
         # Same window as packing: an interrupt here must not leave an unrecorded landing.
-        restore_backup(entry.plugin_dir, backup)
+        try:
+            restore_backup(entry.plugin_dir, backup)
+        except Exception:  # noqa: BLE001 - the interrupt is what must propagate
+            pass
         raise
 
     if not keep_staging:
@@ -505,11 +551,17 @@ def _profile_skills(profile_dir: Path) -> dict[str, str]:
         return found
     for bundle in sorted(node_modules.iterdir()):
         skills = bundle / "skills"
-        if not bundle.is_dir() or not skills.is_dir():
+        try:
+            if not bundle.is_dir() or not skills.is_dir():
+                continue
+            for skill in sorted(skills.iterdir()):
+                if (skill / "SKILL.md").is_file():
+                    found[skill.name] = bundle.name
+        except OSError:
+            # A lock, a broken junction or a half-removed package must not stop the
+            # scan: the profile is not ours, and one unreadable bundle is not a reason
+            # to fail a verify or an update.
             continue
-        for skill in sorted(skills.iterdir()):
-            if (skill / "SKILL.md").is_file():
-                found[skill.name] = bundle.name
     return found
 
 
@@ -684,7 +736,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     except Exception as exc:  # noqa: BLE001 - contract: never exit outside 0/2/3/4/5/6/7
         print(f"error: unexpected {type(exc).__name__}: {exc}", file=sys.stderr)
         print(
-            "hint: this is outside the documented exit codes. If it looks like a workspace "
+            "hint: reported as exit code 2 (self-check failed). If it looks like a workspace "
             "problem, note that --workspace is a global option and must come *before* the "
             "subcommand; otherwise report it with the traceback below.",
             file=sys.stderr,
