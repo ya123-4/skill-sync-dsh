@@ -97,3 +97,17 @@ def test_superpowers_golden(scratch):
     assert sorted(result.skills) == sorted(entry.expected_skills)
     assert result.manual_skills == []
     assert_tree_identical(staging / "skills", entry.plugin_dir / "skills")
+
+
+def test_vercel_skills_golden(scratch):
+    from recipes.vercel_skills import assemble
+
+    entry = registry_entry("vercel-skills-dsh")
+    staging = scratch / "staging"
+    staging.mkdir()
+
+    result = assemble(context_for(entry, staging))
+
+    assert sorted(result.skills) == sorted(entry.expected_skills)
+    assert result.manual_skills == ["skills-cli"]
+    assert_tree_identical(staging / "skills", entry.plugin_dir / "skills")
