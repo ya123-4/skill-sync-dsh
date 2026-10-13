@@ -33,6 +33,7 @@ def pack(
 ) -> Path:
     plugin_dir = Path(plugin_dir)
     dist_dir = Path(dist_dir)
+    _strip_build_junk(plugin_dir)
 
     manifest_path = plugin_dir / "package.json"
     if not manifest_path.is_file():
@@ -83,3 +84,13 @@ def pack(
 
 def _default_runner(argv: list[str], env: dict):
     return subprocess.run(argv, env=env, capture_output=True, text=True, check=False)
+
+
+def _strip_build_junk(plugin_dir: Path) -> None:
+    """Bytecode compiled by a test run must never reach a release tarball.
+
+    ``files: ["skills"]`` overrides ``.gitignore``, so anything a test run leaves
+    in the tree would otherwise ship.
+    """
+    for cache in list(plugin_dir.rglob("__pycache__")):
+        shutil.rmtree(cache, ignore_errors=True)

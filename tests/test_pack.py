@@ -86,3 +86,14 @@ def test_pack_fails_on_a_missing_manifest(scratch):
     (plugin / "package.json").unlink()
     with pytest.raises(PackFailed):
         pack(plugin, scratch / "dist", runner=recording_runner(plugin, [], create=False))
+
+
+def test_pack_strips_python_bytecode_before_packing(scratch):
+    plugin = make_plugin(scratch)
+    cache = plugin / "skills" / "alpha" / "__pycache__"
+    cache.mkdir()
+    (cache / "mod.cpython-314.pyc").write_bytes(b"bytecode")
+
+    pack(plugin, scratch / "dist", runner=recording_runner(plugin, []))
+
+    assert not cache.exists()
