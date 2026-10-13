@@ -96,9 +96,11 @@ def _pack(
         if not artifact.is_file() or artifact.stat().st_size == 0:
             raise PackFailed(f"npm pack produced no usable artifact: {artifact}")
     except BaseException:
-        # The profile installs from this exact path, so a failed pack must leave
-        # the previous artifact where it was.
-        if moved_previous is not None and not artifact.exists():
+        # The profile installs from this exact path, so a failed pack must leave a
+        # *usable* artifact there: a partial or zero-byte file does not count.
+        if moved_previous is not None:
+            if artifact.exists():
+                artifact.unlink()
             shutil.move(str(moved_previous), str(artifact))
         raise
     return artifact

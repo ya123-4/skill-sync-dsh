@@ -251,20 +251,28 @@ def run_update(
     rows: list[UpdateRow] = []
     exit_code = EXIT_OK
     for entry in entries:
-        row = _update_one(
-            entry,
-            client,
-            provider,
-            dist,
-            staging_root,
-            accept_structure_change=accept_structure_change,
-            dry_run=dry_run,
-            rebuild=rebuild,
-            keep_staging=keep_staging,
-            no_pack=no_pack,
-            pack_runner=pack_runner,
-            profile_skills=profile_skills,
-        )
+        try:
+            row = _update_one(
+                entry,
+                client,
+                provider,
+                dist,
+                staging_root,
+                accept_structure_change=accept_structure_change,
+                dry_run=dry_run,
+                rebuild=rebuild,
+                keep_staging=keep_staging,
+                no_pack=no_pack,
+                pack_runner=pack_runner,
+                profile_skills=profile_skills,
+            )
+        except Exception as exc:  # noqa: BLE001 - one broken bundle must not lose the batch
+            row = UpdateRow(
+                entry.package,
+                "failed",
+                f"internal error: {type(exc).__name__}: {exc}",
+                code=EXIT_SELFCHECK,
+            )
         rows.append(row)
         if row.code and exit_code == EXIT_OK:
             exit_code = row.code
@@ -437,19 +445,36 @@ def _update_one(
                 changed=changed,
                 staging=staging,
             )
+        except BaseException:
+            # An interrupt during packing must roll the landing back before it propagates.
+            restore_backup(entry.plugin_dir, backup)
+            raise
 
-    state.write(
-        entry.plugin_dir,
-        {
-            "package": entry.package,
-            "upstream": entry.repo,
-            "syncedTag": synced_tag,
-            "syncedCommit": synced_commit,
-            "syncedAt": datetime.now(timezone.utc).isoformat(timespec="seconds"),
-            "overlayVersion": 1,
-            "skills": state.compute_tree_hashes(entry.plugin_dir / "skills"),
-        },
-    )
+    try:
+        state.write(
+            entry.plugin_dir,
+            {
+                "package": entry.package,
+                "upstream": entry.repo,
+                "syncedTag": synced_tag,
+                "syncedCommit": synced_commit,
+                "syncedAt": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+                "overlayVersion": 1,
+                "skills": state.compute_tree_hashes(entry.plugin_dir / "skills"),
+            },
+        )
+    except Exception as exc:  # noqa: BLE001 - a landing without its record is not a landing
+        restore_backup(entry.plugin_dir, backup)
+        return UpdateRow(
+            entry.package,
+            "failed",
+            f"cannot write the state file: {type(exc).__name__}: {exc}",
+            code=EXIT_APPLY,
+            added=added,
+            removed=removed,
+            changed=changed,
+            staging=staging,
+        )
 
     if not keep_staging:
         shutil.rmtree(staging, ignore_errors=True)

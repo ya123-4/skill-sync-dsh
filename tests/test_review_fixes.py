@@ -537,3 +537,126 @@ def test_verify_reports_a_corrupt_tarball_as_a_verification_failure(scratch):
 
     assert code == 5
     assert "demo-skill-dsh" in stream.getvalue()
+
+
+# ---- round 3, I-1: the state write belongs to the transaction too ----
+
+
+def test_update_rolls_back_when_the_state_write_fails(scratch, dist, monkeypatch):
+    import skill_sync
+
+    entry = make_entry(scratch)
+    (entry.plugin_dir / "README.md").write_text("Bundle for v1.0.0.\n", encoding="utf-8")
+    upstream = make_upstream(scratch, body="new body")
+
+    def locked(plugin_dir, payload):
+        raise OSError("the state file is locked by another process")
+
+    monkeypatch.setattr(skill_sync.state, "write", locked)
+
+    code = run_update(
+        [entry],
+        FakeClient(status="update_available", tag="v2.0.0"),
+        scratch,
+        upstream_provider=provider(upstream),
+        dist_dir=dist,
+        pack_runner=fake_pack_runner(),
+        stream=io.StringIO(),
+    )
+
+    assert code == 7
+    manifest = json.loads((entry.plugin_dir / "package.json").read_text(encoding="utf-8"))
+    assert manifest["version"] == "1.0.0"
+    assert "v1.0.0" in (entry.plugin_dir / "README.md").read_text(encoding="utf-8")
+    assert "old body" in (
+        entry.plugin_dir / "skills" / "alpha" / "SKILL.md"
+    ).read_text(encoding="utf-8")
+
+
+# ---- round 3, I-2: an interrupt during packing must roll back before it propagates ----
+
+
+def test_update_rolls_back_when_packing_is_interrupted(scratch, dist):
+    entry = make_entry(scratch)
+    (entry.plugin_dir / "README.md").write_text("Bundle for v1.0.0.\n", encoding="utf-8")
+    upstream = make_upstream(scratch, body="new body")
+
+    def interrupted(argv, env):
+        raise KeyboardInterrupt()
+
+    with pytest.raises(KeyboardInterrupt):
+        run_update(
+            [entry],
+            FakeClient(status="update_available", tag="v2.0.0"),
+            scratch,
+            upstream_provider=provider(upstream),
+            dist_dir=dist,
+            pack_runner=interrupted,
+            stream=io.StringIO(),
+        )
+
+    manifest = json.loads((entry.plugin_dir / "package.json").read_text(encoding="utf-8"))
+    assert manifest["version"] == "1.0.0"
+    assert "old body" in (
+        entry.plugin_dir / "skills" / "alpha" / "SKILL.md"
+    ).read_text(encoding="utf-8")
+
+
+# ---- round 3, I-3: one broken bundle must not discard the whole batch ----
+
+
+def test_update_keeps_the_batch_when_one_bundle_explodes(scratch, dist):
+    good = make_entry(scratch, package="good-skill-dsh")
+    bad = make_entry(scratch, package="bad-skill-dsh")
+    upstream = make_upstream(scratch, body="new body")
+
+    class ExplodingClient:
+        def latest(self, entry):
+            if entry.package == "bad-skill-dsh":
+                raise ValueError("malformed cached payload")
+            return SimpleNamespace(
+                status="update_available", tag="v2.0.0", commit=None, reason=None, source="test"
+            )
+
+    stream = io.StringIO()
+    code = run_update(
+        [bad, good],
+        ExplodingClient(),
+        scratch,
+        upstream_provider=provider(upstream),
+        dist_dir=dist,
+        pack_runner=fake_pack_runner(),
+        stream=stream,
+    )
+
+    output = stream.getvalue()
+    assert code != 0
+    assert "bad-skill-dsh" in output and "good-skill-dsh" in output
+    assert "malformed cached payload" in output
+    # the healthy bundle still landed and still advertises its install step
+    assert json.loads((good.plugin_dir / "package.json").read_text(encoding="utf-8"))[
+        "version"
+    ] == "2.0.0"
+    assert "install_bundle" in output
+
+
+# ---- round 3, I-4: a zero-byte artifact must not strand the good tarball ----
+
+
+def test_pack_restores_the_previous_tarball_over_a_zero_byte_artifact(scratch):
+    entry = make_entry(scratch)
+    dist = scratch / "dist"
+    dist.mkdir()
+    stale = dist / "demo-skill-dsh-1.0.0.tgz"
+    stale.write_bytes(b"old tarball")
+
+    def runner(argv, env):
+        # a failed npm run that still touched the destination
+        (dist / "demo-skill-dsh-1.0.0.tgz").write_bytes(b"")
+        return SimpleNamespace(returncode=1, stdout="", stderr="boom")
+
+    with pytest.raises(PackFailed):
+        pack(entry.plugin_dir, dist, runner=runner)
+
+    assert stale.read_bytes() == b"old tarball"
+    assert not (dist / ".previous" / "demo-skill-dsh-1.0.0.tgz").exists()
