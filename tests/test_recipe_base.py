@@ -16,8 +16,10 @@ from recipes.base import (
     RecipeContext,
     RecipeResult,
     insert_after,
+    insert_after_once,
     replace_between,
     replace_once,
+    replace_once_or_keep,
     write_tree,
 )
 
@@ -135,3 +137,19 @@ def test_replace_once_replaces_the_first_occurrence_only():
 def test_replace_once_missing_text_raises():
     with pytest.raises(AnchorNotFound):
         replace_once("a\n", "zzz", "X\n")
+
+
+def test_replace_once_or_keep_tolerates_an_upstream_that_already_carries_it():
+    """agent-browser 0.39.1 adopted the Obscura note verbatim: the anchor is gone
+    while the adaptation is already present, and that must not block an update."""
+    assert replace_once_or_keep("a\nNEW\nb\n", "OLD", "NEW") == "a\nNEW\nb\n"
+    assert replace_once_or_keep("a\nOLD\nb\n", "OLD", "NEW") == "a\nNEW\nb\n"
+    with pytest.raises(AnchorNotFound):
+        replace_once_or_keep("nothing relevant here\n", "OLD", "NEW")
+
+
+def test_insert_after_once_does_not_duplicate_an_existing_block():
+    assert insert_after_once("A\nKEEP\n", "A\n", "KEEP\n") == "A\nKEEP\n"
+    assert insert_after_once("A\n", "A\n", "KEEP\n") == "A\nKEEP\n"
+    with pytest.raises(AnchorNotFound):
+        insert_after_once("zzz\n", "A\n", "KEEP\n")

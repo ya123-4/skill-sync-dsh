@@ -43,6 +43,7 @@ class Entry:
     kind: str = "github-tags"
     mode: str = "rebuild"
     source: str = ""
+    asset: str = ""
 
     @property
     def is_rebuild(self) -> bool:
@@ -166,4 +167,5 @@ def _build_entry(item: dict, workspace: Path) -> Entry:
         kind=kind,
         mode=mode,
         source=source,
+        asset=item.get("asset", ""),
     )

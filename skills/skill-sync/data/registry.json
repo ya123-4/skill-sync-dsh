@@ -191,6 +191,7 @@
       "kind": "github-releases",
       "mode": "snapshot",
       "source": "tt-a1i/archify",
+      "asset": "archify.zip",
       "upstream": {
         "tagPrefix": "v"
       },

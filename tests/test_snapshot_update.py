@@ -1,0 +1,141 @@
+"""snapshot 型更新：用上游发布的资产替换受管目录（archify 的形态）。
+
+Increment spec: docs/superpowers/specs/2026-10-14-skill-sync-follow-entries.md
+"""
+import io
+import json
+import zipfile
+from pathlib import Path
+
+import pytest
+
+import skill_sync
+from core.registry import Entry
+from core.release import ReleaseError, extract_subtree
+from helpers import FakeClient, fake_pack_runner
+from skill_sync import run_update
+
+
+def make_zip(path: Path, members: dict) -> Path:
+    with zipfile.ZipFile(path, "w") as archive:
+        for name, text in members.items():
+            archive.writestr(name, text)
+    return path
+
+
+def test_extract_subtree_writes_only_that_subtree(scratch):
+    archive = make_zip(
+        scratch / "a.zip",
+        {
+            "archify/SKILL.md": "---\nname: archify\ndescription: d\n---\n\nbody\n",
+            "archify/bin/tool.mjs": "console.log(1)\n",
+            "other/notes.md": "ignore me\n",
+        },
+    )
+    target = scratch / "out"
+
+    assert extract_subtree(archive, "archify", target) == 2
+    assert (target / "SKILL.md").is_file()
+    assert (target / "bin" / "tool.mjs").is_file()
+    assert not (target / "notes.md").exists()
+
+
+def test_extract_subtree_rejects_a_missing_subtree(scratch):
+    archive = make_zip(scratch / "b.zip", {"other/x.txt": "x"})
+    with pytest.raises(ReleaseError):
+        extract_subtree(archive, "archify", scratch / "out")
+
+
+def test_extract_subtree_refuses_an_escaping_entry(scratch):
+    archive = make_zip(scratch / "c.zip", {"archify/../../escape.txt": "boom"})
+    with pytest.raises(ReleaseError):
+        extract_subtree(archive, "archify", scratch / "out")
+
+
+def snapshot_entry(scratch, version="3.0.1") -> Entry:
+    plugin = scratch / "archify-plugin-build"
+    skill = plugin / "skills" / "archify"
+    skill.mkdir(parents=True)
+    (skill / "SKILL.md").write_text(
+        "---\nname: archify\ndescription: old\n---\n\nold body\n", encoding="utf-8"
+    )
+    (plugin / "package.json").write_text(
+        json.dumps({"name": "archify-skill-dsh", "version": version, "description": "demo"}),
+        encoding="utf-8",
+    )
+    return Entry(
+        package="archify-skill-dsh",
+        plugin_dir=plugin,
+        repo="tt-a1i/archify",
+        tag_prefix="v",
+        skills_root="",
+        strip_prefix="",
+        recipe="",
+        expected_skills=("archify",),
+        manual_skills=(),
+        commit_pinned=False,
+        license="MIT",
+        notes="",
+        kind="github-releases",
+        mode="snapshot",
+        source="tt-a1i/archify",
+        asset="archify.zip",
+    )
+
+
+def test_update_snapshot_lands_the_release_asset(scratch, monkeypatch):
+    entry = snapshot_entry(scratch)
+    archive = make_zip(
+        scratch / "archify.zip",
+        {
+            "archify/SKILL.md": "---\nname: archify\ndescription: new\n---\n\nnew body\n",
+            "archify/bin/tool.mjs": "console.log(2)\n",
+        },
+    )
+    monkeypatch.setattr(skill_sync, "fetch_release_asset", lambda *args, **kwargs: archive)
+    dist = scratch / "dist"
+    stream = io.StringIO()
+
+    code = run_update(
+        [entry],
+        FakeClient(status="update_available", tag="v3.1.0"),
+        scratch,
+        dist_dir=dist,
+        pack_runner=fake_pack_runner(),
+        stream=stream,
+    )
+    text = stream.getvalue()
+
+    assert code == 0, text
+    assert "3.0.1 -> v3.1.0" in text
+    landed = (entry.plugin_dir / "skills" / "archify" / "SKILL.md").read_text(encoding="utf-8")
+    assert "new body" in landed
+    assert (entry.plugin_dir / "skills" / "archify" / "bin" / "tool.mjs").is_file()
+    assert (dist / "archify-skill-dsh-3.1.0.tgz").is_file()
+    payload = json.loads(
+        (entry.plugin_dir / ".skill-sync-state.json").read_text(encoding="utf-8")
+    )
+    assert payload["syncedTag"] == "v3.1.0"
+    assert payload["snapshotAsset"] == "archify.zip"
+
+
+def test_update_snapshot_dry_run_writes_nothing(scratch, monkeypatch):
+    entry = snapshot_entry(scratch)
+    archive = make_zip(
+        scratch / "archify.zip",
+        {"archify/SKILL.md": "---\nname: archify\ndescription: new\n---\n\nnew body\n"},
+    )
+    monkeypatch.setattr(skill_sync, "fetch_release_asset", lambda *args, **kwargs: archive)
+    before = (entry.plugin_dir / "skills" / "archify" / "SKILL.md").read_bytes()
+
+    code = run_update(
+        [entry],
+        FakeClient(status="update_available", tag="v3.1.0"),
+        scratch,
+        dist_dir=scratch / "dist",
+        dry_run=True,
+        stream=io.StringIO(),
+    )
+
+    assert code == 0
+    assert (entry.plugin_dir / "skills" / "archify" / "SKILL.md").read_bytes() == before

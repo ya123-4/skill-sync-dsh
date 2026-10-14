@@ -27,8 +27,10 @@ from recipes.base import (
     RecipeResult,
     StructureChanged,
     insert_after,
+    insert_after_once,
     replace_between,
     replace_once,
+    replace_once_or_keep,
     write_tree,
 )
 
@@ -105,8 +107,8 @@ def _apply_core_overlays(core_dir: Path) -> None:
     proxy_text = proxy.read_text(encoding="utf-8")
     try:
         replacement = overlay("proxy-obscura-line.txt")
-        proxy_text = replace_once(proxy_text, PROXY_LINE, replacement)
-        proxy_text = insert_after(
+        proxy_text = replace_once_or_keep(proxy_text, PROXY_LINE, replacement)
+        proxy_text = insert_after_once(
             proxy_text, replacement + "\n\n", overlay("proxy-chrome-example.txt")
         )
     except AnchorNotFound as exc:

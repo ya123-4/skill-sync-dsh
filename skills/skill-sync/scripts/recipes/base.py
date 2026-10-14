@@ -75,6 +75,32 @@ def replace_once(text: str, old: str, new: str) -> str:
     return text[:index] + new + text[index + len(old):]
 
 
+def replace_once_or_keep(text: str, old: str, new: str) -> str:
+    """Replace ``old`` with ``new`` unless the text already carries ``new``.
+
+    Upstream sometimes adopts a local adaptation verbatim. When that happens the
+    anchor for the replacement is gone, and failing there would block an update
+    that needs no adaptation at all (agent-browser 0.39.1 vs its Obscura note is
+    exactly this case).
+    """
+    if old in text:
+        return replace_once(text, old, new)
+    if new.strip() and new.strip() in text:
+        return text
+    raise AnchorNotFound(f"text not found: {old!r}")
+
+
+def insert_after_once(text: str, anchor: str, block: str) -> str:
+    """Insert ``block`` after ``anchor`` unless it is already somewhere in ``text``.
+
+    The companion to :func:`replace_once_or_keep`: if upstream already carries the
+    adaptation, inserting again would duplicate it.
+    """
+    if block.strip() and block.strip() in text:
+        return text
+    return insert_after(text, anchor, block)
+
+
 def write_tree(source: Path, target: Path) -> list[str]:
     """Copy a directory tree byte-for-byte; return the relative paths written."""
     written: list[str] = []

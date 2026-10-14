@@ -24,6 +24,7 @@ from core import registry, state
 from core.apply import ApplyFailed, apply_candidate, restore_backup
 from core.npm import NpmClient
 from core.profile import installed_version, is_installed
+from core.release import ReleaseError, extract_subtree, fetch_release_asset
 from core.state import StateError
 from core.exitcodes import (
     EXIT_APPLY,
@@ -320,7 +321,19 @@ def run_update(
     exit_code = EXIT_OK
     for entry in entries:
         try:
-            if not entry.is_rebuild:
+            if entry.mode == "snapshot":
+                row = _update_snapshot(
+                    entry,
+                    client,
+                    dist,
+                    default_snapshot_dir(workspace),
+                    Path(staging_root),
+                    pack_runner,
+                    dry_run,
+                    keep_staging,
+                    no_pack,
+                )
+            elif not entry.is_rebuild:
                 row = _update_follow(entry, client, npm, profile_dir, dry_run)
             else:
                 row = _update_one(
@@ -395,6 +408,133 @@ def _update_follow(entry, client, npm, profile_dir: Path | None, dry_run: bool) 
         f"{local} -> {info.tag}",
         command=command,
         issues=issues,
+    )
+
+
+def _update_snapshot(
+    entry,
+    client,
+    dist: Path,
+    cache_dir: Path,
+    staging_root: Path,
+    pack_runner,
+    dry_run: bool,
+    keep_staging: bool,
+    no_pack: bool,
+) -> UpdateRow:
+    """Replace a managed skill directory with the upstream's published snapshot.
+
+    The third update mode: no recipe, because there are no local edits to reapply
+    -- the directory simply *is* the release asset. It still runs through the same
+    landing transaction as a rebuild (backup, verify, pack, roll back on failure).
+    """
+    plugin_dir = entry.plugin_dir
+    previous = plugin_dir / "skills"
+    local = local_version(entry)
+    info = client.latest(entry)
+
+    if info.status != STATUS_UPDATE_AVAILABLE or not info.tag:
+        return UpdateRow(entry.package, "skipped", f"{local} ({info.reason or 'already up to date'})")
+    if not entry.asset:
+        return UpdateRow(
+            entry.package, "failed", "this entry declares no release asset", code=EXIT_SELFCHECK
+        )
+
+    target_name = entry.expected_skills[0] if entry.expected_skills else plugin_dir.name
+    staging = Path(staging_root) / f"{entry.package}-{_stamp()}"
+    if staging.exists():
+        shutil.rmtree(staging, ignore_errors=True)
+
+    try:
+        archive = fetch_release_asset(entry.repo, info.tag, entry.asset, cache_dir)
+        wrote = extract_subtree(archive, target_name, staging / "skills" / target_name)
+    except ReleaseError as exc:
+        return UpdateRow(entry.package, "failed", str(exc), code=EXIT_UPSTREAM, staging=staging)
+    if not wrote:
+        return UpdateRow(
+            entry.package, "failed", f"{entry.asset} produced no files", code=EXIT_UPSTREAM
+        )
+
+    issues = verify_candidate(staging, entry, previous=previous if previous.is_dir() else None)
+    blockers = blocking(issues)
+    if blockers:
+        return UpdateRow(
+            entry.package,
+            "failed",
+            "verification failed",
+            code=EXIT_VERIFY,
+            issues=tuple(f"{issue.code}: {issue.message}" for issue in blockers),
+            staging=staging,
+        )
+
+    added, removed, changed = _diff_skills(previous, staging / "skills")
+    if dry_run:
+        return UpdateRow(
+            entry.package,
+            "dry-run",
+            f"{local} -> {info.tag}",
+            added=added,
+            removed=removed,
+            changed=changed,
+            staging=staging,
+        )
+
+    version = normalize_tag(info.tag, entry.tag_prefix) or local
+    try:
+        backup = apply_candidate(plugin_dir, staging / "skills", version)
+    except ApplyFailed as exc:
+        return UpdateRow(entry.package, "failed", str(exc), code=EXIT_APPLY, staging=staging)
+
+    artifact = None
+    if not no_pack:
+        try:
+            artifact = pack(plugin_dir, dist, runner=pack_runner)
+        except Exception as exc:  # noqa: BLE001 - any pack failure rolls the landing back
+            detail = f"packing failed: {type(exc).__name__}: {exc}"
+            detail += _rollback_detail(plugin_dir, backup)
+            return UpdateRow(entry.package, "failed", detail, code=EXIT_PACK, staging=staging)
+        except BaseException:
+            try:
+                restore_backup(plugin_dir, backup)
+            except Exception:  # noqa: BLE001 - the interrupt is what must propagate
+                pass
+            raise
+
+    try:
+        state.write(
+            plugin_dir,
+            {
+                "package": entry.package,
+                "upstream": entry.repo,
+                "syncedTag": info.tag,
+                "syncedCommit": info.commit,
+                "syncedAt": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+                "overlayVersion": 1,
+                "snapshotAsset": entry.asset,
+                "skills": state.compute_tree_hashes(plugin_dir / "skills"),
+            },
+        )
+    except Exception as exc:  # noqa: BLE001 - a landing without its record is not a landing
+        detail = f"cannot write the state file: {type(exc).__name__}: {exc}"
+        if artifact is not None:
+            try:
+                artifact.unlink()
+            except OSError as cleanup_exc:
+                detail += f" | orphan tarball left behind: {cleanup_exc}"
+        detail += _rollback_detail(plugin_dir, backup)
+        return UpdateRow(entry.package, "failed", detail, code=EXIT_APPLY, staging=staging)
+
+    if not keep_staging:
+        shutil.rmtree(staging, ignore_errors=True)
+
+    return UpdateRow(
+        entry.package,
+        "updated",
+        f"{local} -> {info.tag}",
+        added=added,
+        removed=removed,
+        changed=changed,
+        artifact=artifact,
     )
 
 
