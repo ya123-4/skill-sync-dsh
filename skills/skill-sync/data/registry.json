@@ -185,6 +185,54 @@
       "baselineCommit": "17e255959703a3fad7c8eb7f7b70dcafccc5629a",
       "license": "Apache-2.0",
       "notes": "Curated subset assembled from a pinned upstream commit via jsDelivr; atoms are renamed od-* and four scenario skills get synthesised frontmatter. Source material is cached under tmpwork/od-source/<commit>/."
+    },
+    {
+      "package": "archify-skill-dsh",
+      "kind": "github-releases",
+      "mode": "snapshot",
+      "source": "tt-a1i/archify",
+      "upstream": {
+        "tagPrefix": "v"
+      },
+      "pluginDir": "archify-plugin-build",
+      "expectedSkills": [
+        "archify"
+      ],
+      "manualSkills": [],
+      "license": "MIT",
+      "notes": "Upstream publishes archify.zip as a release asset and its README states skills/archify/ is a verbatim snapshot of that release: an update replaces that directory wholesale - no recipe, no local edits."
+    },
+    {
+      "package": "dsh-better-sidebar",
+      "kind": "npm",
+      "mode": "manual",
+      "source": "dsh-better-sidebar",
+      "license": "unknown",
+      "notes": "Third-party plugin installed from npm. skill-sync reports the version and the pnpm command; it never writes the profile."
+    },
+    {
+      "package": "dsh-mnemon",
+      "kind": "npm",
+      "mode": "manual",
+      "source": "dsh-mnemon",
+      "license": "unknown",
+      "notes": "Third-party plugin installed from npm."
+    },
+    {
+      "package": "dsh-whale-widget",
+      "kind": "npm",
+      "mode": "manual",
+      "source": "dsh-whale-widget",
+      "license": "unknown",
+      "notes": "Third-party plugin installed from npm."
+    },
+    {
+      "package": "dshmarket",
+      "kind": "npm",
+      "mode": "manual",
+      "source": "dshmarket",
+      "license": "unknown",
+      "notes": "Third-party plugin installed from npm; a registry front-end for DSH plugins."
     }
   ]
 }

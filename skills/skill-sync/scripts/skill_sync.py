@@ -22,6 +22,8 @@ from typing import Callable, Sequence
 
 from core import registry, state
 from core.apply import ApplyFailed, apply_candidate, restore_backup
+from core.npm import NpmClient
+from core.profile import installed_version, is_installed
 from core.state import StateError
 from core.exitcodes import (
     EXIT_APPLY,
@@ -195,26 +197,74 @@ def _diff_skills(previous: Path, candidate: Path):
 # ---- check --------------------------------------------------------------
 
 
+def update_command(entry, version: str) -> str | None:
+    """How a human takes a follow-型 entry to ``version``, when that is knowable."""
+    if entry.kind == "npm":
+        return f"pnpm add {entry.source}@{version}"
+    return None
+
+
+def _remote_info(entry, client, npm, local: str | None):
+    """Ask whichever upstream publishes this entry."""
+    if entry.kind == "npm":
+        return npm.latest(entry.source, local)
+    return client.latest(entry)
+
+
+def _check_row(entry, client, profile_dir: Path | None, npm) -> CheckRow:
+    """One row: a rebuilt bundle is compared against its skill upstream, a
+    third-party plugin against whatever publishes it in the profile."""
+    if entry.is_rebuild:
+        info = client.latest(entry)
+        return CheckRow(
+            package=entry.package,
+            local=local_version(entry),
+            remote=info.tag,
+            status=info.status,
+            reason=info.reason,
+            manual_skills=entry.manual_skills,
+        )
+
+    local = installed_version(profile_dir, entry.package)
+    info = _remote_info(entry, client, npm, local)
+    compared = local is not None
+    if not compared:
+        reason = "not installed in this profile"
+    elif info.status == STATUS_UNKNOWN:
+        reason = info.reason or "upstream did not yield a comparable version"
+    else:
+        reason = info.reason
+    return CheckRow(
+        package=entry.package,
+        local=local or "not installed",
+        remote=info.tag,
+        status=info.status if compared else STATUS_UNKNOWN,
+        reason=reason,
+        manual_skills=entry.manual_skills,
+        command=(
+            update_command(entry, info.tag or "")
+            if compared and info.status == STATUS_UPDATE_AVAILABLE and info.tag
+            else None
+        ),
+    )
+
+
 def run_check(
     entries: Sequence,
     client: GithubClient,
     *,
+    profile: Path | str | None = None,
+    npm_client=None,
     as_json: bool = False,
     stream=None,
 ) -> int:
     stream = stream if stream is not None else sys.stdout
+    profile_dir = Path(profile) if profile is not None else None
+    npm = npm_client or NpmClient()
     rows: list[CheckRow] = []
     for entry in entries:
         try:
-            info = client.latest(entry)
-            row = CheckRow(
-                package=entry.package,
-                local=local_version(entry),
-                remote=info.tag,
-                status=info.status,
-                reason=info.reason,
-                manual_skills=entry.manual_skills,
-            )
+            row = _check_row(entry, client, profile_dir, npm)
         except Exception as exc:  # noqa: BLE001 - one bad lookup must not lose the table
             row = CheckRow(
                 package=entry.package,
@@ -247,6 +297,7 @@ def run_update(
     dist_dir: Path | str | None = None,
     staging_root: Path | str | None = None,
     profile: Path | str | None = None,
+    npm_client=None,
     accept_structure_change: bool = False,
     dry_run: bool = False,
     rebuild: bool = False,
@@ -262,25 +313,30 @@ def run_update(
         Path(staging_root) if staging_root is not None else default_staging_root(workspace)
     )
     profile_skills = _profile_skills(Path(profile)) if profile is not None else {}
+    profile_dir = Path(profile) if profile is not None else None
+    npm = npm_client or NpmClient()
 
     rows: list[UpdateRow] = []
     exit_code = EXIT_OK
     for entry in entries:
         try:
-            row = _update_one(
-                entry,
-                client,
-                provider,
-                dist,
-                staging_root,
-                accept_structure_change=accept_structure_change,
-                dry_run=dry_run,
-                rebuild=rebuild,
-                keep_staging=keep_staging,
-                no_pack=no_pack,
-                pack_runner=pack_runner,
-                profile_skills=profile_skills,
-            )
+            if not entry.is_rebuild:
+                row = _update_follow(entry, client, npm, profile_dir, dry_run)
+            else:
+                row = _update_one(
+                    entry,
+                    client,
+                    provider,
+                    dist,
+                    staging_root,
+                    accept_structure_change=accept_structure_change,
+                    dry_run=dry_run,
+                    rebuild=rebuild,
+                    keep_staging=keep_staging,
+                    no_pack=no_pack,
+                    pack_runner=pack_runner,
+                    profile_skills=profile_skills,
+                )
         except Exception as exc:  # noqa: BLE001 - one broken bundle must not lose the batch
             # `GithubClient.latest` already turns upstream failures into `unknown`
             # rows, so an exception escaping here is this bundle's own problem: a
@@ -296,8 +352,50 @@ def run_update(
         if row.code and exit_code == EXIT_OK:
             exit_code = row.code
 
-    print(render_update(rows), file=stream)
+    print(render_update(rows, profile=profile_dir), file=stream)
     return exit_code
+
+
+def _update_follow(entry, client, npm, profile_dir: Path | None, dry_run: bool) -> UpdateRow:
+    """A third-party plugin is not rebuilt: report how to update it, change nothing.
+
+    Its bytes live in the profile, which this tool never writes, and npm's newest
+    version may carry breaking changes -- so the decision stays with the user.
+    """
+    local = installed_version(profile_dir, entry.package)
+    info = _remote_info(entry, client, npm, local)
+    command = update_command(entry, info.tag or "") if info.tag else None
+
+    if local is None:
+        return UpdateRow(
+            entry.package,
+            "skipped",
+            f"not installed in {profile_dir or 'the profile'}",
+            code=EXIT_SELFCHECK,
+        )
+    if info.status != STATUS_UPDATE_AVAILABLE or not info.tag:
+        detail = info.reason or "already up to date"
+        return UpdateRow(entry.package, "skipped", f"{local} ({detail})")
+
+    action = "manual" if not dry_run else "manual (dry-run)"
+    if command:
+        issues: tuple[str, ...] = ()
+    elif entry.mode == "snapshot":
+        target = entry.expected_skills[0] if entry.expected_skills else "?"
+        issues = (
+            f"upstream publishes {entry.package} as a release asset; replace "
+            f"{entry.plugin_dir}/skills/{target}/ by hand - automatic snapshot "
+            "updates are not implemented yet",
+        )
+    else:
+        issues = ("no one-line update for this upstream; compare by hand",)
+    return UpdateRow(
+        entry.package,
+        action,
+        f"{local} -> {info.tag}",
+        command=command,
+        issues=issues,
+    )
 
 
 def _rollback_detail(plugin_dir: Path, backup: Path) -> str:
@@ -763,7 +861,12 @@ def _dispatch(parser, args) -> int:
         except RegistryError as exc:
             print(f"error: {exc}", file=sys.stderr)
             return EXIT_SELFCHECK
-        return run_check(selected, _client(workspace, args), as_json=args.json)
+        return run_check(
+            selected,
+            _client(workspace, args),
+            profile=default_profile(),
+            as_json=args.json,
+        )
 
     if args.command == "update":
         try:

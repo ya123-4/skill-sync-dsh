@@ -81,7 +81,7 @@ def test_check_json_shape(three_entries):
     payload = json.loads(stream.getvalue())
 
     assert [row["package"] for row in payload] == [entry.package for entry in three_entries]
-    assert set(payload[0]) == {"package", "local", "remote", "status", "reason"}
+    assert set(payload[0]) == {"package", "local", "remote", "status", "reason", "command"}
     assert payload[0]["status"] == STATUS_UPDATE_AVAILABLE
     assert payload[0]["remote"] == "v2.0.0"
 

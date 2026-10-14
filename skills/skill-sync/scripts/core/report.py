@@ -8,9 +8,11 @@ stream writable is the CLI's job (it reconfigures stdout to UTF-8).
 from __future__ import annotations
 
 import json
+import os
 from dataclasses import dataclass
 from pathlib import Path
 
+from core.profile import is_installed
 from core.upstream import STATUS_UNKNOWN, STATUS_UP_TO_DATE, STATUS_UPDATE_AVAILABLE
 
 _STATUS_LABELS = {
@@ -30,6 +32,7 @@ class CheckRow:
     status: str
     reason: str | None = None
     manual_skills: tuple[str, ...] = ()
+    command: str | None = None
 
 
 def status_label(status: str) -> str:
@@ -45,6 +48,7 @@ def render_check(rows: list[CheckRow], as_json: bool = False) -> str:
                 "remote": row.remote,
                 "status": row.status,
                 "reason": row.reason,
+                "command": row.command,
             }
             for row in rows
         ]
@@ -58,6 +62,8 @@ def render_check(rows: list[CheckRow], as_json: bool = False) -> str:
         if row.reason:
             line += f"  ({row.reason})"
         lines.append(line)
+        if row.command and row.status == STATUS_UPDATE_AVAILABLE:
+            lines.append(f"      run: {row.command}")
 
     counts = {status: sum(1 for row in rows if row.status == status) for status in _STATUS_ORDER}
     lines.append("")
@@ -87,13 +93,14 @@ class UpdateRow:
     issues: tuple[str, ...] = ()
     artifact: Path | None = None
     staging: Path | None = None
+    command: str | None = None
 
 
-def render_update(rows: list[UpdateRow]) -> str:
+def render_update(rows: list[UpdateRow], *, profile: Path | None = None) -> str:
     width = max((len(row.package) for row in rows), default=0)
     lines = ["skill-sync update", ""]
     for row in rows:
-        line = f"  {row.package:<{width}}  {row.action:<8}"
+        line = f"  {row.package:<{width}}  {row.action:<18}"
         if row.message:
             line += f"  {row.message}"
         lines.append(line)
@@ -105,6 +112,8 @@ def render_update(rows: list[UpdateRow]) -> str:
             sample = ", ".join(row.changed[:6])
             more = "" if len(row.changed) <= 6 else f" (+{len(row.changed) - 6} more)"
             lines.append(f"      ~ {len(row.changed)} changed file(s): {sample}{more}")
+        if row.command:
+            lines.append(f"      run: {row.command}")
         for issue in row.issues:
             lines.append(f"      ! {issue}")
         if row.staging is not None:
@@ -115,5 +124,54 @@ def render_update(rows: list[UpdateRow]) -> str:
         lines.append("")
         lines.append("next step (this tool never touches the profile):")
         for row in artifacts:
-            lines.append(f"  install_bundle  {row.artifact}")
+            lines.extend(_install_hint(row, profile))
     return "\n".join(lines)
+
+
+def _install_hint(row: UpdateRow, profile: Path | None) -> list[str]:
+    """How this artifact is supposed to reach the profile.
+
+    A bundle that is *already* installed has to be replaced while DSH is not
+    running: the running host holds a handle on an installed bundle, pnpm then
+    fails with ERR_PNPM_EPERM -- and it empties the package directory before
+    failing. Getting that wrong cost two real packages here, so the warning is
+    unconditional and carries the exact command when the layout is recognisable.
+    """
+    if not is_installed(profile, row.package):
+        return [f"  install_bundle  {row.artifact}"]
+
+    lines = [
+        f"  {row.package} is ALREADY installed, so it must be replaced while DSH is not",
+        "  running: the host holds a handle on an installed bundle, and pnpm fails with",
+        "  ERR_PNPM_EPERM after emptying the package directory first.",
+        "    1) quit DSH",
+    ]
+    command = _profile_install_command(profile)
+    if command:
+        lines.append(f"    2) {command}")
+    else:
+        lines.append(f'    2) cd "{profile}" and run pnpm install (use the pnpm bundled with DSH)')
+    lines.append("    3) start DSH again")
+    lines.append(f"  new artifact: {row.artifact}")
+    return lines
+
+
+def _profile_install_command(profile: Path | None) -> str | None:
+    """The exact pnpm invocation, when this machine's layout is recognisable."""
+    local = os.environ.get("LOCALAPPDATA")
+    if profile is None or not local:
+        return None
+    pnpm = (
+        Path(local)
+        / "Programs"
+        / "DeepSeek Harness"
+        / "resources"
+        / "runtime"
+        / "pnpm"
+        / "bin"
+        / "pnpm.cjs"
+    )
+    node = Path(r"C:\Program Files\nodejs\node.exe")
+    if not pnpm.is_file() or not node.is_file():
+        return None
+    return f'cd "{profile}" ; & "{node}" "{pnpm}" install --store-dir "{local}\\pnpm\\store"'

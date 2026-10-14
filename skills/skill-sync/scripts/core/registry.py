@@ -14,7 +14,8 @@ from pathlib import Path
 
 PLUGIN_BUILD_DIRNAME = "dsh-plugin-build"
 REGISTRY_SCHEMA = 1
-_REQUIRED_ENTRY_KEYS = ("package", "pluginDir", "upstream", "recipe", "expectedSkills")
+KINDS = ("github-tags", "github-releases", "github-commits", "npm")
+MODES = ("rebuild", "snapshot", "manual")
 _REQUIRED_UPSTREAM_KEYS = ("repo", "tagPrefix", "skillsRoot", "stripPrefix")
 
 
@@ -25,7 +26,7 @@ class RegistryError(RuntimeError):
 @dataclass(frozen=True)
 class Entry:
     package: str
-    plugin_dir: Path
+    plugin_dir: Path | None
     repo: str
     tag_prefix: str
     skills_root: str
@@ -37,6 +38,15 @@ class Entry:
     license: str
     notes: str
     baseline_commit: str | None = None
+    # follow-型条目：上游在哪里查（kind）与怎么更新（mode）。
+    # 省略即现有的 rebuild 型，行为完全不变。
+    kind: str = "github-tags"
+    mode: str = "rebuild"
+    source: str = ""
+
+    @property
+    def is_rebuild(self) -> bool:
+        return self.mode == "rebuild"
 
     def upstream_skill_name(self, local_name: str) -> str:
         """Map a produced skill directory name back to its upstream name."""
@@ -104,35 +114,56 @@ def select(entries: list[Entry], names: list[str]) -> list[Entry]:
 
 
 def _build_entry(item: dict, workspace: Path) -> Entry:
-    label = item.get("package", "<unknown>")
-    for key in _REQUIRED_ENTRY_KEYS:
-        if key not in item:
-            raise RegistryError(f"registry entry {label} is missing {key!r}")
-    upstream = item["upstream"]
-    for key in _REQUIRED_UPSTREAM_KEYS:
-        if key not in upstream:
-            raise RegistryError(f"{label}: upstream is missing {key!r}")
+    if "package" not in item:
+        raise RegistryError("registry entry is missing 'package'")
+    label = item["package"]
+    kind = item.get("kind", "github-tags")
+    mode = item.get("mode", "rebuild")
+    if kind not in KINDS:
+        raise RegistryError(f"{label}: unknown kind {kind!r} (expected one of {', '.join(KINDS)})")
+    if mode not in MODES:
+        raise RegistryError(f"{label}: unknown mode {mode!r} (expected one of {', '.join(MODES)})")
 
-    plugin_dir = (workspace / item["pluginDir"]).resolve()
-    if not (plugin_dir / "package.json").is_file():
-        raise RegistryError(f"{label}: no package.json under {plugin_dir}")
+    upstream = item.get("upstream") or {}
 
-    expected = tuple(item["expectedSkills"])
-    if not expected:
-        raise RegistryError(f"{label}: expectedSkills is empty")
+    # rebuild 型：上游是 skill 仓库，需要完整的 upstream 描述与配方。
+    if mode == "rebuild":
+        for key in _REQUIRED_UPSTREAM_KEYS:
+            if key not in upstream:
+                raise RegistryError(f"{label}: upstream is missing {key!r}")
+        expected = tuple(item.get("expectedSkills") or ())
+        if not expected:
+            raise RegistryError(f"{label}: expectedSkills is empty")
+
+    # rebuild 与 snapshot 都要动本地目录；manual 型不碰文件系统。
+    plugin_dir: Path | None = None
+    if mode in ("rebuild", "snapshot"):
+        if "pluginDir" not in item:
+            raise RegistryError(f"{label}: mode {mode!r} needs pluginDir")
+        plugin_dir = (workspace / item["pluginDir"]).resolve()
+        if not (plugin_dir / "package.json").is_file():
+            raise RegistryError(f"{label}: no package.json under {plugin_dir}")
+
+    # follow 型需要一个可查询的上游标识：npm 包名，或 owner/repo（kind 决定怎么查）。
+    source = item.get("source") or ""
+    if kind != "github-tags" and not source:
+        raise RegistryError(f"{label}: kind {kind!r} needs 'source'")
 
     return Entry(
         package=item["package"],
         plugin_dir=plugin_dir,
-        repo=upstream["repo"],
-        tag_prefix=upstream["tagPrefix"],
-        skills_root=upstream["skillsRoot"],
-        strip_prefix=upstream["stripPrefix"],
-        recipe=item["recipe"],
-        expected_skills=expected,
+        repo=upstream.get("repo", "") or (source if kind != "npm" else ""),
+        tag_prefix=upstream.get("tagPrefix", ""),
+        skills_root=upstream.get("skillsRoot", ""),
+        strip_prefix=upstream.get("stripPrefix", ""),
+        recipe=item.get("recipe", ""),
+        expected_skills=tuple(item.get("expectedSkills") or ()),
         manual_skills=tuple(item.get("manualSkills", [])),
         commit_pinned=bool(item.get("commitPinned", False)),
         license=item.get("license", "unknown"),
         notes=item.get("notes", ""),
         baseline_commit=item.get("baselineCommit"),
+        kind=kind,
+        mode=mode,
+        source=source,
     )

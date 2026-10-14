@@ -8,12 +8,18 @@ from core.registry import RegistryError, load, resolve_workspace, select
 WORKSPACE = Path(__file__).resolve().parents[3]
 NOWHERE = Path("C:/definitely-not-a-workspace-xyz")
 
+# 前五个从 skill 仓库重建（rebuild），后五个跟随上游发布（follow）。
 EXPECTED_PACKAGES = [
     "agent-browser-skill-dsh",
     "vercel-skills-dsh",
     "superpowers-skill-dsh",
     "mattpocock-skills-dsh",
     "open-design-skills-dsh",
+    "archify-skill-dsh",
+    "dsh-better-sidebar",
+    "dsh-mnemon",
+    "dsh-whale-widget",
+    "dshmarket",
 ]
 
 
@@ -26,8 +32,17 @@ def registry():
     return load(WORKSPACE)
 
 
-def test_registry_has_five_entries_in_order(registry):
+def test_registry_lists_every_managed_package_in_order(registry):
     assert [entry.package for entry in registry] == EXPECTED_PACKAGES
+
+
+def test_follow_entries_declare_a_queryable_upstream(registry):
+    for entry in registry:
+        if entry.is_rebuild:
+            continue
+        assert not entry.recipe, entry.package
+        if entry.kind != "github-tags":
+            assert entry.source, entry.package
 
 
 def test_agent_browser_entry_fields(registry):
@@ -66,6 +81,8 @@ def test_content_commits_are_recorded_where_the_bytes_need_one(registry):
 
 def test_expected_skills_match_what_is_installed(registry):
     for entry in registry:
+        if entry.plugin_dir is None:
+            continue  # follow 型没有本地受管目录
         on_disk = {path.name for path in (entry.plugin_dir / "skills").iterdir() if path.is_dir()}
         assert set(entry.expected_skills) == on_disk, entry.package
 
@@ -76,6 +93,9 @@ def test_manual_skills_are_declared(registry):
 
 def test_plugin_dir_resolves_under_workspace(registry):
     for entry in registry:
+        if entry.plugin_dir is None:
+            assert entry.mode == "manual", entry.package
+            continue
         assert (entry.plugin_dir / "package.json").is_file()
 
 
