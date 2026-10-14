@@ -224,6 +224,7 @@ def _check_row(entry, client, profile_dir: Path | None, npm) -> CheckRow:
             status=info.status,
             reason=info.reason,
             manual_skills=entry.manual_skills,
+            upstream_failed=info.status == STATUS_UNKNOWN,
         )
 
     local = installed_version(profile_dir, entry.package)
@@ -247,6 +248,7 @@ def _check_row(entry, client, profile_dir: Path | None, npm) -> CheckRow:
             if compared and info.status == STATUS_UPDATE_AVAILABLE and info.tag
             else None
         ),
+        upstream_failed=compared and info.status == STATUS_UNKNOWN,
     )
 
 
@@ -274,13 +276,15 @@ def run_check(
                 status=STATUS_UNKNOWN,
                 reason=f"{type(exc).__name__}: {exc}",
                 manual_skills=entry.manual_skills,
+                upstream_failed=True,
             )
         rows.append(row)
     print(render_check(rows, as_json=as_json), file=stream)
 
     # A run that compared nothing at all is an upstream failure, not a pass;
-    # otherwise the documented code 3 would be unreachable for `check`.
-    if rows and all(row.status == STATUS_UNKNOWN for row in rows):
+    # otherwise the documented code 3 would be unreachable for `check`. A package
+    # that is simply not installed in this profile is not an upstream failure.
+    if rows and all(row.upstream_failed for row in rows):
         return EXIT_UPSTREAM
     return EXIT_OK
 
@@ -380,11 +384,19 @@ def _update_follow(entry, client, npm, profile_dir: Path | None, dry_run: bool) 
     command = update_command(entry, info.tag or "") if info.tag else None
 
     if local is None:
+        # Not installed in this profile is a fact about the profile, not a failure.
         return UpdateRow(
             entry.package,
             "skipped",
             f"not installed in {profile_dir or 'the profile'}",
-            code=EXIT_SELFCHECK,
+        )
+    if info.status == STATUS_UNKNOWN:
+        # An unreachable upstream must never read as "nothing to do".
+        return UpdateRow(
+            entry.package,
+            "unknown",
+            info.reason or "upstream lookup failed",
+            code=EXIT_UPSTREAM,
         )
     if info.status != STATUS_UPDATE_AVAILABLE or not info.tag:
         detail = info.reason or "already up to date"
@@ -830,7 +842,14 @@ def _tgz_skill_hashes(artifact: Path) -> dict[str, str]:
 
 
 def _verify_entry(entry, dist: Path, profile_skills: dict | None) -> list[str]:
-    """Everything that can be checked about one bundle without the network."""
+    """Everything that can be checked about one bundle without the network.
+
+    A follow-型 plugin has no managed directory here -- its bytes live in the
+    profile, which this tool never writes -- so there is nothing to verify.
+    """
+    if entry.plugin_dir is None:
+        return []
+
     issues: list[str] = []
     version = ""
 

@@ -42,6 +42,7 @@ def npm_entry(scratch, package="dsh-better-sidebar", version="0.25.0", source=No
 
 def make_profile(scratch, dependencies: dict) -> "object":
     profile = scratch / "profile"
+    profile.mkdir(parents=True, exist_ok=True)
     for name, spec in dependencies.items():
         package = profile / "node_modules" / name
         package.mkdir(parents=True, exist_ok=True)
@@ -245,3 +246,77 @@ def test_next_step_uses_install_bundle_for_a_bundle_not_in_the_profile(scratch, 
 
     assert "install_bundle" in text
     assert "quit DSH" not in text
+
+
+def test_install_hint_points_the_manifest_at_the_new_tarball(scratch, dist):
+    """`pnpm install` would faithfully rebuild the version being replaced: the
+    profile still pins the old tarball, so the hint has to be `pnpm add file:`."""
+    profile = make_profile(scratch, {"demo-skill-dsh": "file:old.tgz"})
+    entry = make_entry(scratch)
+    upstream = make_upstream(scratch, body="new body")
+
+    stream = io.StringIO()
+    run_update(
+        [entry],
+        FakeClient(status="update_available", tag="v2.0.0"),
+        scratch,
+        upstream_provider=provider(upstream),
+        dist_dir=dist,
+        profile=profile,
+        pack_runner=fake_pack_runner(),
+        stream=stream,
+    )
+    text = stream.getvalue()
+
+    assert 'add "file:' in text
+    assert "demo-skill-dsh-2.0.0.tgz" in text
+    assert " install --store-dir" not in text
+
+
+def test_check_does_not_fail_when_a_follow_entry_is_simply_not_installed(scratch):
+    """An empty profile is a fact about the profile, not an upstream failure."""
+    profile = make_profile(scratch, {})
+    entry = npm_entry(scratch)
+
+    class NpmClient:
+        def latest(self, name, local=None):
+            return LatestInfo(STATUS_UPDATE_AVAILABLE, "0.26.0", None, None, "npm")
+
+    stream = io.StringIO()
+    code = run_check(
+        [entry], FakeClient(), profile=profile, npm_client=NpmClient(), stream=stream
+    )
+
+    assert code == 0
+    assert "not installed" in stream.getvalue()
+
+
+def test_update_reports_an_unreachable_npm_registry_as_an_upstream_failure(scratch):
+    profile = make_profile(scratch, {"dsh-better-sidebar": "0.25.0"})
+    entry = npm_entry(scratch)
+
+    class NpmClient:
+        def latest(self, name, local=None):
+            return LatestInfo(STATUS_UNKNOWN, None, None, "network down", "npm")
+
+    stream = io.StringIO()
+    code = run_update(
+        [entry],
+        FakeClient(),
+        scratch,
+        dist_dir=scratch / "dist",
+        profile=profile,
+        npm_client=NpmClient(),
+        stream=stream,
+    )
+
+    assert code == 3, stream.getvalue()
+    assert "network down" in stream.getvalue()
+
+
+def test_verify_has_nothing_to_check_for_a_follow_entry(scratch):
+    from skill_sync import _verify_entry
+
+    entry = npm_entry(scratch)
+    assert entry.plugin_dir is None
+    assert _verify_entry(entry, scratch / "dist", None) == []

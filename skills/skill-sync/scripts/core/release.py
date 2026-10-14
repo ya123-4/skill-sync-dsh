@@ -76,9 +76,20 @@ def extract_subtree(archive: Path | str, subtree: str, target: Path | str) -> in
             for member in members:
                 relative = member.filename[len(prefix):]
                 parts = Path(relative).parts
-                if not relative or ".." in parts or Path(relative).is_absolute():
+                if (
+                    not relative
+                    or relative.startswith(("/", "\\"))
+                    or ".." in parts
+                    or Path(relative).is_absolute()
+                ):
                     raise ReleaseError(f"{archive.name}: refusing entry {member.filename!r}")
                 destination = target / relative
+                # A leading separator survives the checks above on Windows
+                # ("/evil.txt" is not absolute there), so confirm containment.
+                resolved = destination.resolve()
+                root = target.resolve()
+                if resolved != root and root not in resolved.parents:
+                    raise ReleaseError(f"{archive.name}: entry escapes the target: {member.filename!r}")
                 destination.parent.mkdir(parents=True, exist_ok=True)
                 destination.write_bytes(handle.read(member))
                 written += 1

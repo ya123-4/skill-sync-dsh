@@ -139,3 +139,19 @@ def test_update_snapshot_dry_run_writes_nothing(scratch, monkeypatch):
 
     assert code == 0
     assert (entry.plugin_dir / "skills" / "archify" / "SKILL.md").read_bytes() == before
+
+
+def test_extract_subtree_refuses_a_member_that_is_rooted_after_the_prefix(scratch):
+    """`archify//evil.txt` strips to a rooted path, which Windows does not call
+    absolute -- containment has to be checked, not assumed."""
+    for name in ("archify//evil.txt", "archify/\\evil.txt"):
+        archive = make_zip(scratch / "d.zip", {name: "boom"})
+        with pytest.raises(ReleaseError):
+            extract_subtree(archive, "archify", scratch / "out-rooted")
+        assert not (scratch / "evil.txt").exists()
+
+
+def test_extract_subtree_refuses_a_member_that_climbs_out(scratch):
+    archive = make_zip(scratch / "e.zip", {"archify/sub/../../escape.txt": "boom"})
+    with pytest.raises(ReleaseError):
+        extract_subtree(archive, "archify", scratch / "out-climb")
