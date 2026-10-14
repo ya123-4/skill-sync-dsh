@@ -147,28 +147,43 @@ def _install_hint(row: UpdateRow, profile: Path | None) -> list[str]:
         "  ERR_PNPM_EPERM after emptying the package directory first.",
         "    1) quit DSH",
     ]
-    command = _profile_install_command(profile, row.artifact)
-    if command:
-        lines.append(f"    2) {command}")
+    # Two steps, and never `pnpm add`: add re-resolves every `^` dependency, which
+    # can drag unrelated packages to freshly published versions and trip DSH's
+    # minimumReleaseAge policy. pnpm writes before it verifies, so that failure
+    # leaves a violating lockfile entry behind and breaks every later pnpm command.
+    pointer = _point_command(profile, row.package, row.artifact)
+    if pointer:
+        lines.append(f"    2) {pointer}")
     else:
-        lines.append(
-            f'    2) cd "{profile}" and, with the pnpm bundled with DSH, add the new tarball:'
-        )
-        lines.append(f'       pnpm add "file:{row.artifact}"')
-    lines.append("    3) start DSH again")
+        lines.append(f'    2) point "{row.package}" at the new tarball in the profile manifest')
+    installer = _profile_pnpm(profile)
+    if installer:
+        lines.append(f"    3) {installer}")
+    else:
+        lines.append("    3) cd into the profile and run pnpm install (the pnpm DSH ships with)")
+    lines.append("    4) start DSH again")
     lines.append(f"  new artifact: {row.artifact}")
     return lines
 
 
-def _profile_install_command(profile: Path | None, artifact: Path | None) -> str | None:
-    """The exact pnpm invocation, when this machine's layout is recognisable.
+def _point_command(profile: Path | None, package: str, artifact: Path | None) -> str | None:
+    """The bundled helper that rewrites just this one dependency, without installing."""
+    if profile is None or artifact is None:
+        return None
+    helper = Path(__file__).resolve().parents[1] / "point_profile.py"
+    if not helper.is_file():
+        return None
+    return f'python "{helper}" "{profile}" {package} "file:{artifact}"'
 
-    It has to be ``pnpm add file:<new tgz>``, not ``pnpm install``: the profile's
-    manifest still pins the *old* tarball, so a plain install would faithfully
-    rebuild the version being replaced and the update would never land.
+
+def _profile_pnpm(profile: Path | None) -> str | None:
+    """The exact ``pnpm install``, when this machine's layout is recognisable.
+
+    It has to be ``install``, not ``add``: install resolves only what changed,
+    while add re-resolves the whole range (see the note in :func:`_install_hint`).
     """
     local = os.environ.get("LOCALAPPDATA")
-    if profile is None or artifact is None or not local:
+    if profile is None or not local:
         return None
     pnpm = (
         Path(local)
@@ -183,7 +198,4 @@ def _profile_install_command(profile: Path | None, artifact: Path | None) -> str
     node = Path(r"C:\Program Files\nodejs\node.exe")
     if not pnpm.is_file() or not node.is_file():
         return None
-    return (
-        f'cd "{profile}" ; & "{node}" "{pnpm}" add "file:{artifact}" '
-        f'--store-dir "{local}\\pnpm\\store"'
-    )
+    return f'cd "{profile}" ; & "{node}" "{pnpm}" install --store-dir "{local}\\pnpm\\store"'

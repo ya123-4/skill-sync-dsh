@@ -268,9 +268,34 @@ def test_install_hint_points_the_manifest_at_the_new_tarball(scratch, dist):
     )
     text = stream.getvalue()
 
-    assert 'add "file:' in text
+    assert "point_profile.py" in text
     assert "demo-skill-dsh-2.0.0.tgz" in text
-    assert " install --store-dir" not in text
+    assert " install --store-dir" in text
+    assert "pnpm add" not in text
+
+
+def test_point_profile_only_rewrites_that_dependency(scratch):
+    """`pnpm add` re-resolves every `^` range and can trip DSH's supply-chain
+    policy; pointing the manifest first keeps the install to one resolution."""
+    from point_profile import point
+
+    profile = make_profile(scratch, {"demo-skill-dsh": "file:old.tgz", "other": "^1.2.3"})
+    before = json.loads((profile / "package.json").read_text(encoding="utf-8"))
+
+    message = point(profile, "demo-skill-dsh", "file:new.tgz")
+
+    after = json.loads((profile / "package.json").read_text(encoding="utf-8"))
+    assert after["dependencies"]["demo-skill-dsh"] == "file:new.tgz"
+    assert after["dependencies"]["other"] == before["dependencies"]["other"]
+    assert "old.tgz" in message and "new.tgz" in message
+
+
+def test_point_profile_refuses_an_unknown_package(scratch):
+    from point_profile import point
+
+    profile = make_profile(scratch, {"demo-skill-dsh": "file:old.tgz"})
+    with pytest.raises(SystemExit):
+        point(profile, "not-a-dependency", "file:new.tgz")
 
 
 def test_check_does_not_fail_when_a_follow_entry_is_simply_not_installed(scratch):
