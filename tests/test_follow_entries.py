@@ -298,6 +298,20 @@ def test_point_profile_refuses_an_unknown_package(scratch):
         point(profile, "not-a-dependency", "file:new.tgz")
 
 
+def test_point_profile_normalises_backslashes_and_keeps_the_manifest_parseable(scratch):
+    """This is the bug that broke a live profile: a Windows-style spec is written
+    into JSON as escape sequences, so the manifest stops parsing."""
+    from point_profile import point
+
+    profile = make_profile(scratch, {"demo-skill-dsh": "file:old.tgz"})
+    point(profile, "demo-skill-dsh", "file:C:\\Users\\x\\dist\\demo-2.0.0.tgz")
+
+    payload = json.loads((profile / "package.json").read_text(encoding="utf-8"))
+    spec = payload["dependencies"]["demo-skill-dsh"]
+    assert "\\" not in spec
+    assert spec == "file:C:/Users/x/dist/demo-2.0.0.tgz"
+
+
 def test_check_does_not_fail_when_a_follow_entry_is_simply_not_installed(scratch):
     """An empty profile is a fact about the profile, not an upstream failure."""
     profile = make_profile(scratch, {})

@@ -39,7 +39,18 @@ def point(profile: str | Path, package: str, new_spec: str) -> str:
     marker = f'"{package}": "{old_spec}"'
     if marker not in text:
         raise SystemExit(f"cannot find {marker!r} verbatim in {path}")
-    path.write_text(text.replace(marker, f'"{package}": "{new_spec}"', 1), encoding="utf-8")
+
+    # A backslash inside a JSON string is an escape sequence ("\U" is not even a
+    # legal one), and every file: specifier in these manifests uses forward
+    # slashes -- so normalise, then prove the result still parses before writing.
+    new_spec = new_spec.replace("\\", "/")
+    updated = text.replace(marker, f'"{package}": "{new_spec}"', 1)
+    try:
+        json.loads(updated)
+    except json.JSONDecodeError as exc:
+        raise SystemExit(f"refusing to write {path}: the result would not be valid JSON: {exc}")
+    path.write_text(updated, encoding="utf-8")
+    json.loads(path.read_text(encoding="utf-8"))  # read back: never trust a silent write
     return f"{package}:\n  {old_spec}\n  -> {new_spec}"
 
 
