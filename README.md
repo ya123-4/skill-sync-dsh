@@ -31,7 +31,11 @@ python $script verify --all --profile %USERPROFILE%\.dsh\profiles\desktop
 ```
 
 `update` never touches the DSH profile. It ends with the tarball path and the exact
-`install_bundle` step for a human to run.
+`install_bundle` step for a human to run — or, when the package is already installed, the
+quit-DSH / `pnpm add "file:<new tgz>"` / restart sequence. That distinction matters:
+installing an already-loaded bundle while DSH runs empties it (pnpm cannot rename the
+directory a running host holds, and it clears the target before failing), and a plain
+`pnpm install` would rebuild the version being replaced instead of the new one.
 
 ## How a rebuild stays honest
 

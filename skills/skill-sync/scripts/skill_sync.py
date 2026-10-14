@@ -336,6 +336,8 @@ def run_update(
                     dry_run,
                     keep_staging,
                     no_pack,
+                    profile_skills=profile_skills,
+                    accept_structure_change=accept_structure_change,
                 )
             elif not entry.is_rebuild:
                 row = _update_follow(entry, client, npm, profile_dir, dry_run)
@@ -433,6 +435,8 @@ def _update_snapshot(
     dry_run: bool,
     keep_staging: bool,
     no_pack: bool,
+    profile_skills: dict | None = None,
+    accept_structure_change: bool = False,
 ) -> UpdateRow:
     """Replace a managed skill directory with the upstream's published snapshot.
 
@@ -467,8 +471,20 @@ def _update_snapshot(
             entry.package, "failed", f"{entry.asset} produced no files", code=EXIT_UPSTREAM
         )
 
-    issues = verify_candidate(staging, entry, previous=previous if previous.is_dir() else None)
-    blockers = blocking(issues)
+    # Same verification contract as a rebuild: names owned by *other* installed
+    # bundles must not be claimed, and a changed skill set needs the same explicit
+    # opt-in rather than being reported as a verification failure.
+    foreign_skills = {
+        name for name, owner in (profile_skills or {}).items() if owner != entry.package
+    }
+    issues = verify_candidate(
+        staging,
+        entry,
+        previous=previous if previous.is_dir() else None,
+        profile_skills=foreign_skills,
+    )
+    structure_issues = [issue for issue in issues if issue.code == "structure-changed"]
+    blockers = blocking(issues, ignore_codes={"structure-changed"})
     if blockers:
         return UpdateRow(
             entry.package,
@@ -476,6 +492,15 @@ def _update_snapshot(
             "verification failed",
             code=EXIT_VERIFY,
             issues=tuple(f"{issue.code}: {issue.message}" for issue in blockers),
+            staging=staging,
+        )
+    if structure_issues and not accept_structure_change:
+        return UpdateRow(
+            entry.package,
+            "blocked",
+            "this snapshot changes the skill set",
+            code=EXIT_STRUCTURE,
+            issues=tuple(f"{issue.code}: {issue.message}" for issue in structure_issues),
             staging=staging,
         )
 

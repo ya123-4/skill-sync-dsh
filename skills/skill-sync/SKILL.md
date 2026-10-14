@@ -5,10 +5,16 @@ description: Check whether skill bundles built from open-source skill repositori
 
 # skill-sync
 
-Five bundles in `dsh-plugin-build/` are built from open-source skill repositories.
-`skill-sync` knows those five, how each one is assembled, and what its installed bytes
-came from. It refuses to guess about anything else: coverage comes from the registry, so a
-new bundle is managed by adding one entry.
+Ten packages are managed from one registry. Five are rebuilt bundles in
+`dsh-plugin-build/`: each is assembled from an open-source skill repository by a
+recipe, and `skill-sync` knows how it is assembled and what its installed bytes came
+from. The other five are third-party plugins that follow whatever publishes them —
+four from npm, one (archify) from a release asset — and for those it only reports.
+
+It refuses to guess about anything else: coverage comes from the registry, so a new
+package is managed by adding one entry. Every entry declares `kind` (where the
+upstream is queried: `github-tags`, `github-releases`, `npm`) and `mode` (how it is
+updated: `rebuild`, `snapshot`, `manual`).
 
 ## When to use it
 
@@ -52,17 +58,30 @@ that no skill name collides with another bundle in the profile, and that the tar
 ## The install gate
 
 `skill-sync` never touches the DSH profile. After a successful `update` the report ends with
-the exact next step:
+the exact next step, and which one it is depends on whether the package is already installed:
 
 ```
 next step (this tool never touches the profile):
-  install_bundle  <absolute path to the new .tgz>
+  install_bundle  <absolute path to the new .tgz>          # not installed yet
 ```
 
-Run that through the DSH `plugin_manager` tool (`install_bundle`), then tell the user the
-profile changed and that a restart may be needed. An existing tarball for the same version
-is moved to `dist/.previous/` before packing, so the path the profile currently points at
-still exists until the new one is installed.
+but for a package that is **already** in the profile:
+
+```
+  <package> is ALREADY installed, so it must be replaced while DSH is not running:
+  the host holds a handle on an installed bundle, and pnpm fails with ERR_PNPM_EPERM
+  after emptying the package directory first.
+    1) quit DSH
+    2) cd <profile> ; & node pnpm.cjs add "file:<new .tgz>" --store-dir <store>
+    3) start DSH again
+```
+
+Take that second path seriously — installing an already-loaded bundle while DSH runs
+has twice emptied a real package here (the tarball appears under the *new* version, so a
+plain `pnpm install` would faithfully rebuild the version being replaced; the command
+re-points the manifest, which is also why `install_bundle` must not be used to upgrade).
+An existing tarball for the same version is moved to `dist/.previous/` before packing, so
+the path the profile currently points at still exists until the new one is installed.
 
 ## Exit codes
 

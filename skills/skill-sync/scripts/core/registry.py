@@ -145,10 +145,34 @@ def _build_entry(item: dict, workspace: Path) -> Entry:
         if not (plugin_dir / "package.json").is_file():
             raise RegistryError(f"{label}: no package.json under {plugin_dir}")
 
+    # kind 与 mode 必须互相兼容：registry 不接受"能加载、但一跑就崩"的组合。
+    if mode == "rebuild" and kind != "github-tags":
+        raise RegistryError(f"{label}: mode 'rebuild' needs kind 'github-tags', got {kind!r}")
+    if mode == "snapshot":
+        if kind != "github-releases":
+            raise RegistryError(
+                f"{label}: mode 'snapshot' needs kind 'github-releases', got {kind!r}"
+            )
+        if not item.get("asset"):
+            raise RegistryError(f"{label}: mode 'snapshot' needs 'asset' (the release asset name)")
+        snapshot_targets = tuple(item.get("expectedSkills") or ())
+        if len(snapshot_targets) != 1:
+            raise RegistryError(
+                f"{label}: mode 'snapshot' needs exactly one expectedSkills entry -- the "
+                f"directory the asset replaces -- got {len(snapshot_targets)}"
+            )
+    if kind == "github-commits":
+        raise RegistryError(
+            f"{label}: kind 'github-commits' is declared in the spec but not implemented; "
+            "use 'github-tags' or 'github-releases'"
+        )
+
     # follow 型需要一个可查询的上游标识：npm 包名，或 owner/repo（kind 决定怎么查）。
     source = item.get("source") or ""
-    if kind != "github-tags" and not source:
-        raise RegistryError(f"{label}: kind {kind!r} needs 'source'")
+    if kind == "npm" and not source:
+        raise RegistryError(f"{label}: kind 'npm' needs 'source' (the package name)")
+    if kind != "npm" and not (source or upstream.get("repo")):
+        raise RegistryError(f"{label}: kind {kind!r} needs 'source' or upstream.repo")
 
     return Entry(
         package=item["package"],
