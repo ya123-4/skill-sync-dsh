@@ -30,7 +30,7 @@ python $script update --all               # 把所有有新版本的插件重建
 python $script verify --all --profile %USERPROFILE%\.dsh\profiles\desktop
 ```
 
-`update` **不会碰 DSH profile**：它以 tgz 路径和一条 `install_bundle` 指令结束，安装由人决定。
+`update` **不会碰 DSH profile**：它以新 tgz 路径和一条人工执行的指令结束。**未安装**过该插件时给的是 `install_bundle`；**已安装**时给的是「退出 DSH → `pnpm add "file:<新 tgz>"` → 重开 DSH」——这个区别很重要：在 DSH 运行中安装已加载的包会把包装空（pnpm 无法重命名宿主正持有的目录，而且它在失败前先清空了目标），而单纯 `pnpm install` 只会忠实重建被替换的那个版本。
 
 ## 重建为什么可信
 

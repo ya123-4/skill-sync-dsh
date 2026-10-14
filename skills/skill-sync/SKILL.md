@@ -8,8 +8,9 @@ description: Check whether skill bundles built from open-source skill repositori
 Ten packages are managed from one registry. Five are rebuilt bundles in
 `dsh-plugin-build/`: each is assembled from an open-source skill repository by a
 recipe, and `skill-sync` knows how it is assembled and what its installed bytes came
-from. The other five are third-party plugins that follow whatever publishes them —
-four from npm, one (archify) from a release asset — and for those it only reports.
+from. The other five follow whatever publishes them: four npm plugins (reported only —
+`update` prints the `pnpm add` command and writes nothing) and archify, whose release
+asset `snapshot` mode replaces wholesale.
 
 It refuses to guess about anything else: coverage comes from the registry, so a new
 package is managed by adding one entry. Every entry declares `kind` (where the

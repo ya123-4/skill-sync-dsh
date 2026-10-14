@@ -151,7 +151,10 @@ def _install_hint(row: UpdateRow, profile: Path | None) -> list[str]:
     if command:
         lines.append(f"    2) {command}")
     else:
-        lines.append(f'    2) cd "{profile}" and run pnpm install (use the pnpm bundled with DSH)')
+        lines.append(
+            f'    2) cd "{profile}" and, with the pnpm bundled with DSH, add the new tarball:'
+        )
+        lines.append(f'       pnpm add "file:{row.artifact}"')
     lines.append("    3) start DSH again")
     lines.append(f"  new artifact: {row.artifact}")
     return lines

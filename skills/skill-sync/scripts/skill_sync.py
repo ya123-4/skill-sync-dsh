@@ -554,12 +554,33 @@ def _update_snapshot(
     except Exception as exc:  # noqa: BLE001 - a landing without its record is not a landing
         detail = f"cannot write the state file: {type(exc).__name__}: {exc}"
         if artifact is not None:
+            # Same reasoning as a rebuild: the tarball advertises a version this
+            # bundle does not contain, and any artifact packing moved aside returns.
+            previous_artifact = artifact.parent / ".previous" / artifact.name
             try:
                 artifact.unlink()
+                if previous_artifact.is_file():
+                    shutil.move(str(previous_artifact), str(artifact))
             except OSError as cleanup_exc:
                 detail += f" | orphan tarball left behind: {cleanup_exc}"
         detail += _rollback_detail(plugin_dir, backup)
-        return UpdateRow(entry.package, "failed", detail, code=EXIT_APPLY, staging=staging)
+        return UpdateRow(
+            entry.package,
+            "failed",
+            detail,
+            code=EXIT_APPLY,
+            added=added,
+            removed=removed,
+            changed=changed,
+            staging=staging,
+        )
+    except BaseException:
+        # Same window as packing: an interrupt here must not leave an unrecorded landing.
+        try:
+            restore_backup(plugin_dir, backup)
+        except Exception:  # noqa: BLE001 - the interrupt is what must propagate
+            pass
+        raise
 
     if not keep_staging:
         shutil.rmtree(staging, ignore_errors=True)

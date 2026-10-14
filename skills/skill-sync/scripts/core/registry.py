@@ -171,8 +171,22 @@ def _build_entry(item: dict, workspace: Path) -> Entry:
     source = item.get("source") or ""
     if kind == "npm" and not source:
         raise RegistryError(f"{label}: kind 'npm' needs 'source' (the package name)")
+    if kind == "npm" and item.get("pluginDir"):
+        raise RegistryError(
+            f"{label}: kind 'npm' must not declare pluginDir -- its bytes live in the "
+            "profile, which this tool never writes"
+        )
     if kind != "npm" and not (source or upstream.get("repo")):
         raise RegistryError(f"{label}: kind {kind!r} needs 'source' or upstream.repo")
+    if mode == "manual" and kind != "npm":
+        # The spec's rea-dsh-plugin shape. Its upstream version line (rea-agents-6.x)
+        # does not compare with the plugin's own version (0.1.x), so it needs a
+        # dedicated mapping -- until then, refuse it instead of producing a
+        # meaningless verdict or a TypeError on the first run.
+        raise RegistryError(
+            f"{label}: mode 'manual' currently supports only kind 'npm'; "
+            f"{kind!r} needs its own version mapping first"
+        )
 
     return Entry(
         package=item["package"],
