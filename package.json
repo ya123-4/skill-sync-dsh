@@ -1,6 +1,6 @@
 {
   "name": "skill-sync-dsh",
-  "version": "0.1.3",
+  "version": "0.2.0",
   "description": "DeepSeek Harness skill bundle that checks the upstream skill version of skill plugins built from open-source skill repositories and rebuilds them into installable tarballs. Skill-only bundle; the update path never touches the profile.",
   "license": "MIT",
   "type": "module",
