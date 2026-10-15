@@ -14,6 +14,8 @@ open-source skill repositories — and rebuilds them when upstream moves.
 | `superpowers-skill-dsh` | `obra/superpowers` | tag `vX.Y.Z` |
 | `mattpocock-skills-dsh` | `mattpocock/skills` | commit `49dd158d…` (see `KNOWN_DEVIATIONS.md`) |
 | `open-design-skills-dsh` | `nexu-io/open-design` | tag `open-design-vX.Y.Z` + commit, material fetched per file |
+| `humanizer-zh-skill-dsh` | `op7418/Humanizer-zh` | no tags and no releases at all: compared by commit, baseline is the `syncedCommit` in the bundle's state |
+| `humanizer-skill-dsh` | `blader/humanizer` | tag `vX.Y.Z` (the English original) |
 | `rea-dsh-plugin` | npm package `rea-agents` | registry tarball at the version its `optionalDependencies` pins; skill bodies in the package's `skills/` |
 | `archify-skill-dsh` | `tt-a1i/archify` | release asset `archify.zip`; replaces `skills/archify/` wholesale (snapshot) |
 | `ppt-master-skill-dsh` | `hugohe3/ppt-master` | release asset `ppt-master-skill-{tag}.zip` (the asset name carries the version, hence the `{tag}` placeholder); `assetSubtree` unwraps the `ppt-master/skills/ppt-master/` layer (snapshot) |
@@ -23,11 +25,18 @@ another bundle — plus one recipe module in `skills/skill-sync/scripts/recipes/
 `rebuild` entry. A `snapshot` entry needs no recipe: upstream publishes the finished asset,
 and `assetSubtree` names the tree inside it that is the payload.
 
-A `rebuild` entry pairs with `kind: github-tags` (a repository) or `kind: npm` (a published
-package). The npm form needs only `skillsRoot`, and its version baseline is the pin in the
-bundle's `optionalDependencies`: `rea-dsh-plugin` ships rea-agents 6.x skills while the
-plugin itself is 0.1.x, so the two version lines are compared separately and the pin moves
-with every rebuild.
+A `rebuild` entry pairs with `kind: github-tags` (a repository), `kind: github-commits` (a
+repository that publishes no tags at all, so the newest commit on its declared `branch` is
+the release) or `kind: npm` (a published package). The npm form needs only `skillsRoot`, and
+its version baseline is the pin in the bundle's `optionalDependencies`: `rea-dsh-plugin`
+ships rea-agents 6.x skills while the plugin itself is 0.1.x, so the two version lines are
+compared separately and the pin moves with every rebuild.
+
+A `github-commits` bundle has no version to show: `check` prints the local and remote
+revisions side by side and compares the remote head with the `syncedCommit` recorded in the
+bundle's own state file — so a bundle that has never been synced reports `unknown`, never
+"up to date". Its own patch version moves on every rebuild, and `--rebuild` replays the
+registry's `baselineCommit` (or the recorded revision) when upstream has nothing new.
 
 ## Commands
 

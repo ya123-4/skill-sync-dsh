@@ -14,6 +14,8 @@ DeepSeek Harness 的 skill 插件「上游版本看守」：检查那些由开�
 | `superpowers-skill-dsh` | `obra/superpowers` | tag `vX.Y.Z` |
 | `mattpocock-skills-dsh` | `mattpocock/skills` | commit `49dd158d…`（见 `KNOWN_DEVIATIONS.md`） |
 | `open-design-skills-dsh` | `nexu-io/open-design` | tag `open-design-vX.Y.Z` + commit，素材逐文件抓取 |
+| `humanizer-zh-skill-dsh` | `op7418/Humanizer-zh` | 完全没有 tag、也没有 release：按 commit 比较，基准是插件 state 里的 `syncedCommit` |
+| `humanizer-skill-dsh` | `blader/humanizer` | tag `vX.Y.Z`（英文原版） |
 | `rea-dsh-plugin` | npm 包 `rea-agents` | 该包的 registry tarball，版本取插件 `optionalDependencies` 里的钉版；skill 正文在包内 `skills/` |
 | `archify-skill-dsh` | `tt-a1i/archify` | release 资产 `archify.zip`，整体替换 `skills/archify/`（snapshot） |
 | `ppt-master-skill-dsh` | `hugohe3/ppt-master` | release 资产 `ppt-master-skill-{tag}.zip`（资产名含版本，用 `{tag}` 占位），`assetSubtree` 剥掉 `ppt-master/skills/ppt-master/` 这层（snapshot） |
@@ -22,10 +24,16 @@ DeepSeek Harness 的 skill 插件「上游版本看守」：检查那些由开�
 （`rebuild` 型再加一个 `skills/skill-sync/scripts/recipes/` 配方模块；`snapshot` 型不需要配方，
 上游直接发布成品资产，`assetSubtree` 负责说明资产里哪棵树是载荷）。
 
-`rebuild` 条目的 `kind` 可以是 `github-tags`（上游是仓库，按 tag 重建）或 `npm`（上游是已发布
-的包，按其 registry tarball 重建）：npm 型只需 `skillsRoot`，比较基准取插件
-`optionalDependencies` 里的钉版——`rea-dsh-plugin` 装的是 rea-agents 6.x 的 skill，而插件自身
-是 0.1.x，两条版本线各自演进，钉版随每次重建一起前进。
+`rebuild` 条目的 `kind` 可以是 `github-tags`（上游是仓库，按 tag 重建）、`github-commits`
+（上游根本没有 tag，于是它分支上最新的 commit 就是"最新版"）或 `npm`（上游是已发布的包，
+按其 registry tarball 重建）：npm 型只需 `skillsRoot`，比较基准取插件 `optionalDependencies`
+里的钉版——`rea-dsh-plugin` 装的是 rea-agents 6.x 的 skill，而插件自身是 0.1.x，两条版本线
+各自演进，钉版随每次重建一起前进。
+
+`github-commits` 型的插件没有版本号可显示：`check` 把本地与远端修订并排打印，拿远端 head 与
+插件自己 state 文件里的 `syncedCommit` 比较——所以**从未同步过**的插件报 `unknown`，而绝不会
+报"最新"。它自身的 patch 版本每次重建都前进；上游没有新东西时，`--rebuild` 会重放登记表里的
+`baselineCommit`（或 state 里记录的那个修订）。
 
 ## 命令
 

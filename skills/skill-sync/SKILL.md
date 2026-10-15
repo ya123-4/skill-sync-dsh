@@ -5,7 +5,7 @@ description: Check whether skill bundles built from open-source skill repositori
 
 # skill-sync
 
-Twelve packages are managed from one registry. Six are rebuilt bundles: five are
+Fourteen packages are managed from one registry. Eight are rebuilt bundles: seven are
 assembled from an open-source skill repository, and `rea-dsh-plugin` is assembled from
 the published `rea-agents` npm package — its skills ship inside that package, and the
 release it vendored is pinned in its `optionalDependencies`, because the plugin's own
@@ -19,11 +19,19 @@ for an asset that wraps the payload cover the two shapes seen so far.
 
 It refuses to guess about anything else: coverage comes from the registry, so a new
 package is managed by adding one entry. Every entry declares `kind` (where the
-upstream is queried: `github-tags`, `github-releases`, `npm`) and `mode` (how it is
-updated: `rebuild`, `snapshot`, `manual`). A `rebuild` entry pairs with `github-tags`
-(a repository, rebuilt from a tag) or `npm` (a published package, rebuilt from its
-registry tarball); the npm form needs only `skillsRoot`, and its comparison baseline is
-the bundle's `optionalDependencies` pin rather than the bundle's own version.
+upstream is queried: `github-tags`, `github-releases`, `github-commits`, `npm`) and
+`mode` (how it is updated: `rebuild`, `snapshot`, `manual`). A `rebuild` entry pairs
+with `github-tags` (a repository, rebuilt from a tag), `github-commits` (a repository
+that publishes no tags at all, rebuilt from the newest commit on its declared `branch`)
+or `npm` (a published package, rebuilt from its registry tarball); the npm form needs
+only `skillsRoot`, and its comparison baseline is the bundle's `optionalDependencies`
+pin rather than the bundle's own version.
+
+A `github-commits` bundle has no version to compare. `check` asks for the head commit of
+its branch and compares it with the `syncedCommit` recorded in the bundle's own state
+file, so a bundle that has never been synced reports `unknown` — never "up to date". Its
+own patch version moves on every rebuild, and `--rebuild` replays the registry's
+`baselineCommit` (or the recorded revision) when upstream has nothing new.
 
 ## When to use it
 
