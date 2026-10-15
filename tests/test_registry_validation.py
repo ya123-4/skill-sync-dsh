@@ -22,7 +22,7 @@ UPSTREAM = {"repo": "o/r", "tagPrefix": "v", "skillsRoot": "skills", "stripPrefi
         ),
         pytest.param(
             {"package": "x", "kind": "github-commits", "mode": "manual", "source": "o/r"},
-            id="commits-not-implemented",
+            id="commits-manual-not-supported",
         ),
         pytest.param(
             {"package": "x", "kind": "github-tags", "mode": "manual", "source": "o/r"},
@@ -109,3 +109,37 @@ def test_registry_refuses_combinations_the_code_cannot_run(item):
 def test_registry_refuses_incomplete_entries(item):
     with pytest.raises(RegistryError):
         _build_entry(item, WORKSPACE)
+
+
+COMMIT_ENTRY = {
+    "package": "x",
+    "kind": "github-commits",
+    "mode": "rebuild",
+    "pluginDir": "archify-plugin-build",
+    "recipe": "root_skill",
+    "expectedSkills": ["a"],
+    "source": "o/r",
+}
+
+
+def test_commit_kind_rebuild_is_accepted_without_a_tag_prefix():
+    """A commit-tracked upstream has no tags, so tagPrefix/stripPrefix are optional."""
+    entry = _build_entry({**COMMIT_ENTRY, "upstream": {"repo": "o/r", "skillsRoot": "."}}, WORKSPACE)
+
+    assert (entry.kind, entry.mode, entry.branch) == ("github-commits", "rebuild", "main")
+    assert (entry.tag_prefix, entry.strip_prefix, entry.repo) == ("", "", "o/r")
+
+
+def test_commit_kind_rebuild_honours_an_explicit_branch():
+    entry = _build_entry(
+        {**COMMIT_ENTRY, "upstream": {"repo": "o/r", "skillsRoot": ".", "branch": "trunk"}},
+        WORKSPACE,
+    )
+
+    assert entry.branch == "trunk"
+
+
+def test_commit_kind_rebuild_needs_skills_root():
+    """The refusal must name skillsRoot, not 'kind not implemented'."""
+    with pytest.raises(RegistryError, match="skillsRoot"):
+        _build_entry({**COMMIT_ENTRY, "upstream": {"repo": "o/r"}}, WORKSPACE)

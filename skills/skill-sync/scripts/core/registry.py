@@ -47,6 +47,9 @@ class Entry:
     # snapshot 型：资产内部要提取的前缀。留空表示资产顶层就是 skill 目录
     # （archify 的形态）；ppt-master 的资产多包了一层，写 "ppt-master/skills"。
     asset_subtree: str = ""
+    # commit 型：比较与下载所用的上游分支。上游没有 tag/release 时，它的最新
+    # commit 就是"最新版本"。
+    branch: str = "main"
 
     @property
     def is_rebuild(self) -> bool:
@@ -135,7 +138,9 @@ def _build_entry(item: dict, workspace: Path) -> Entry:
     # skill 放在包内的 skillsRoot 下，版本由插件的 optionalDependencies 钉住
     # （见 core.upstream.local_version），所以只需要 skillsRoot。
     if mode == "rebuild":
-        required = ("skillsRoot",) if kind == "npm" else _REQUIRED_UPSTREAM_KEYS
+        required = (
+            ("skillsRoot",) if kind in ("npm", "github-commits") else _REQUIRED_UPSTREAM_KEYS
+        )
         for key in required:
             if key not in upstream:
                 raise RegistryError(f"{label}: upstream is missing {key!r}")
@@ -153,9 +158,10 @@ def _build_entry(item: dict, workspace: Path) -> Entry:
             raise RegistryError(f"{label}: no package.json under {plugin_dir}")
 
     # kind 与 mode 必须互相兼容：registry 不接受"能加载、但一跑就崩"的组合。
-    if mode == "rebuild" and kind not in ("github-tags", "npm"):
+    if mode == "rebuild" and kind not in ("github-tags", "npm", "github-commits"):
         raise RegistryError(
-            f"{label}: mode 'rebuild' needs kind 'github-tags' or 'npm', got {kind!r}"
+            f"{label}: mode 'rebuild' needs kind 'github-tags', 'github-commits' or 'npm', "
+            f"got {kind!r}"
         )
     if mode == "snapshot":
         if kind != "github-releases":
@@ -170,12 +176,6 @@ def _build_entry(item: dict, workspace: Path) -> Entry:
                 f"{label}: mode 'snapshot' needs exactly one expectedSkills entry -- the "
                 f"directory the asset replaces -- got {len(snapshot_targets)}"
             )
-    if kind == "github-commits":
-        raise RegistryError(
-            f"{label}: kind 'github-commits' is declared in the spec but not implemented; "
-            "use 'github-tags' or 'github-releases'"
-        )
-
     # follow 型需要一个可查询的上游标识：npm 包名，或 owner/repo（kind 决定怎么查）。
     source = item.get("source") or ""
     if kind == "npm" and not source:
@@ -215,4 +215,5 @@ def _build_entry(item: dict, workspace: Path) -> Entry:
         source=source,
         asset=item.get("asset", ""),
         asset_subtree=item.get("assetSubtree", ""),
+        branch=str(upstream.get("branch") or "main"),
     )
