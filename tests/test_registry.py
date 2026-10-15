@@ -17,6 +17,8 @@ EXPECTED_PACKAGES = [
     "superpowers-skill-dsh",
     "mattpocock-skills-dsh",
     "open-design-skills-dsh",
+    "humanizer-zh-skill-dsh",
+    "humanizer-skill-dsh",
     "rea-dsh-plugin",
     "archify-skill-dsh",
     "ppt-master-skill-dsh",
@@ -78,6 +80,7 @@ def test_content_commits_are_recorded_where_the_bytes_need_one(registry):
     expected = {
         "mattpocock-skills-dsh": "49dd158d1076134a641b33efb035946536778336",
         "open-design-skills-dsh": "17e255959703a3fad7c8eb7f7b70dcafccc5629a",
+        "humanizer-zh-skill-dsh": "f4518a8eab97b8bfebc66a89d34320a89bef6930",
     }
     for entry in registry:
         assert entry.baseline_commit == expected.get(entry.package), entry.package
@@ -114,6 +117,24 @@ def test_upstream_skill_name_strips_the_bundle_prefix(registry):
 def test_select_filters_by_package(registry):
     chosen = select(registry, ["superpowers-skill-dsh", "vercel-skills-dsh"])
     assert [entry.package for entry in chosen] == ["superpowers-skill-dsh", "vercel-skills-dsh"]
+
+
+def test_humanizer_entries(registry):
+    """Two upstreams that publish one root SKILL.md, but track it differently.
+
+    The Chinese edition has no tags at all, so it is compared by commit; the
+    English original publishes releases, so it keeps the tag path untouched.
+    """
+    zh = by_package(registry, "humanizer-zh-skill-dsh")
+    assert (zh.kind, zh.mode, zh.branch, zh.tag_prefix) == ("github-commits", "rebuild", "main", "")
+    assert zh.recipe == "root_skill"
+    assert zh.expected_skills == ("humanizer-zh",)
+    assert zh.skills_root == "."
+
+    en = by_package(registry, "humanizer-skill-dsh")
+    assert (en.kind, en.mode, en.tag_prefix) == ("github-tags", "rebuild", "v")
+    assert en.recipe == "root_skill"
+    assert en.expected_skills == ("humanizer",)
 
 
 def test_select_unknown_package_raises(registry):

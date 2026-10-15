@@ -19,6 +19,7 @@ from core.registry import load
 from core.upstream import (
     fetch_npm_snapshot,
     fetch_snapshot,
+    local_revision,
     local_version,
     npm_snapshot_slug,
     snapshot_slug,
@@ -46,15 +47,24 @@ def pinned_ref(entry) -> str:
     Normally the tag matching the bundle's own version; for a bundle built from a
     mid-branch snapshot (see KNOWN_DEVIATIONS.md) the recorded commit instead. A
     bundle vendoring an npm package is pinned by its ``optionalDependencies``
-    entry, because its own version line is unrelated to the package's.
+    entry, because its own version line is unrelated to the package's. A
+    commit-tracked bundle has no tag, so it replays the revision in its state file
+    (or the registry's baseline before the first sync).
     """
     if entry.kind == "npm":
         return local_version(entry)
+    if entry.kind == "github-commits":
+        return entry.baseline_commit or local_revision(entry) or ""
     return entry.baseline_commit or f"{entry.tag_prefix}{installed_version(entry)}"
 
 
 def snapshot_for(entry) -> Path:
     ref = pinned_ref(entry)
+    if not ref:
+        pytest.skip(
+            f"no recorded revision for {entry.package}; run: "
+            f"python tools/fetch_snapshots.py --only {entry.package}"
+        )
     if entry.kind == "npm":
         slug = npm_snapshot_slug(entry.source, ref)
         root = SNAPSHOT_CACHE / "snapshots" / slug
@@ -336,6 +346,36 @@ def test_open_design_synthesizes_frontmatter_for_body_only_scenarios(scratch):
         assert text.startswith("---\n"), name
         assert f"name: {name}" in text, name
         assert "description:" in text, name
+
+
+def test_humanizer_zh_golden(scratch):
+    """The Chinese edition's bytes come from a commit, not a tag."""
+    from recipes.root_skill import assemble
+
+    entry = registry_entry("humanizer-zh-skill-dsh")
+    staging = scratch / "staging"
+    staging.mkdir()
+
+    result = assemble(context_for(entry, staging))
+
+    assert sorted(result.skills) == sorted(entry.expected_skills)
+    assert result.manual_skills == []
+    assert_tree_identical(staging / "skills", entry.plugin_dir / "skills")
+
+
+def test_humanizer_golden(scratch):
+    """The English original's bytes come from its release tag."""
+    from recipes.root_skill import assemble
+
+    entry = registry_entry("humanizer-skill-dsh")
+    staging = scratch / "staging"
+    staging.mkdir()
+
+    result = assemble(context_for(entry, staging))
+
+    assert sorted(result.skills) == sorted(entry.expected_skills)
+    assert result.manual_skills == []
+    assert_tree_identical(staging / "skills", entry.plugin_dir / "skills")
 
 
 def test_rea_golden(scratch):

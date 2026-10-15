@@ -27,6 +27,7 @@ from core.upstream import (  # noqa: E402
     SnapshotError,
     fetch_npm_snapshot,
     fetch_snapshot,
+    local_revision,
     local_version,
     npm_snapshot_slug,
     snapshot_slug,
@@ -41,10 +42,14 @@ def snapshot_ref(entry) -> str:
 
     A GitHub-tagged bundle: tag prefix + its own version. A bundle vendoring an npm
     package: the release its ``optionalDependencies`` pin names, because the
-    plugin's own version line is unrelated to the package's.
+    plugin's own version line is unrelated to the package's. A commit-tracked
+    bundle has no tag at all, so it replays the revision its own state file
+    records -- or the registry's pinned baseline before the first sync.
     """
     if entry.kind == "npm":
         return local_version(entry)
+    if entry.kind == "github-commits":
+        return entry.baseline_commit or local_revision(entry) or ""
     return f"{entry.tag_prefix}{local_version(entry)}"
 
 
@@ -68,6 +73,10 @@ def main(argv: list[str] | None = None) -> int:
     failures = 0
     for entry in entries:
         ref = snapshot_ref(entry)
+        if not ref:
+            print(f"FAIL {entry.package}: no recorded revision to fetch")
+            failures += 1
+            continue
         slug = (
             npm_snapshot_slug(entry.source, ref)
             if entry.kind == "npm"

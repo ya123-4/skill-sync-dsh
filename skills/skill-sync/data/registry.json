@@ -187,6 +187,44 @@
       "notes": "Curated subset assembled from a pinned upstream commit via jsDelivr; atoms are renamed od-* and four scenario skills get synthesised frontmatter. Source material is cached under tmpwork/od-source/<commit>/."
     },
     {
+      "package": "humanizer-zh-skill-dsh",
+      "pluginDir": "dsh-plugin-build/humanizer-zh-skill-dsh",
+      "kind": "github-commits",
+      "mode": "rebuild",
+      "source": "op7418/Humanizer-zh",
+      "upstream": {
+        "repo": "op7418/Humanizer-zh",
+        "skillsRoot": ".",
+        "branch": "main"
+      },
+      "recipe": "root_skill",
+      "expectedSkills": [
+        "humanizer-zh"
+      ],
+      "manualSkills": [],
+      "commitPinned": true,
+      "baselineCommit": "f4518a8eab97b8bfebc66a89d34320a89bef6930",
+      "license": "MIT",
+      "notes": "Upstream keeps its only skill file at the repository root and publishes no tags and no releases, so check compares the newest commit on main and the baseline is the syncedCommit recorded in this bundle's state file; the bundle's own patch version moves on every rebuild. Only the root SKILL.md ships."
+    },
+    {
+      "package": "humanizer-skill-dsh",
+      "pluginDir": "dsh-plugin-build/humanizer-skill-dsh",
+      "upstream": {
+        "repo": "blader/humanizer",
+        "tagPrefix": "v",
+        "skillsRoot": ".",
+        "stripPrefix": ""
+      },
+      "recipe": "root_skill",
+      "expectedSkills": [
+        "humanizer"
+      ],
+      "manualSkills": [],
+      "license": "MIT",
+      "notes": "The English original: one skill file at the repository root, published as tags (v3.1.0 at packaging time), so the bundle version follows the upstream version line. It is a separate project from op7418/Humanizer-zh and does not track it. Only the root SKILL.md ships."
+    },
+    {
       "package": "rea-dsh-plugin",
       "pluginDir": "rea-plugin-build/rea-dsh-plugin",
       "kind": "npm",
