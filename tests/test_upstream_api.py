@@ -311,15 +311,38 @@ def test_commit_kind_offline_without_cache_is_unknown(scratch, cache_dir):
     assert (info.status, info.source) == ("unknown", "cache")
 
 
-def test_commit_kind_caches_the_head_commit(scratch, cache_dir):
+def test_commit_kind_never_serves_a_cached_revision(scratch, cache_dir):
+    """A commit moves, unlike a tag: a fresh cache must not hide a moved head.
+
+    The tag path may answer from its 10-minute cache because a tag cannot move.
+    A branch head can, and the value would be landed by ``update`` -- so a
+    commit-tracked bundle asks upstream every time it is online.
+    """
     entry = commit_entry(scratch, synced_commit="a" * 40)
+    responses = iter(["b" * 40, "c" * 40])
     calls = []
 
     def _http(url, headers):
         calls.append(url)
+        return 200, json.dumps({"sha": next(responses)}).encode("utf-8")
+
+    first = GithubClient(http=_http, cache_dir=cache_dir)
+    assert first.latest(entry).commit == "b" * 40
+    second = GithubClient(http=_http, cache_dir=cache_dir)
+    assert second.latest(entry).commit == "c" * 40
+    assert len(calls) == 2
+
+
+def test_commit_kind_offline_uses_the_cached_revision(scratch, cache_dir):
+    entry = commit_entry(scratch, synced_commit="a" * 40)
+
+    def _http(url, headers):
         return 200, json.dumps({"sha": "b" * 40}).encode("utf-8")
 
     GithubClient(http=_http, cache_dir=cache_dir).latest(entry)
-    GithubClient(http=_http, cache_dir=cache_dir).latest(entry)
 
-    assert len(calls) == 1
+    def _offline(url, headers):
+        raise AssertionError("offline mode must not touch the network")
+
+    info = GithubClient(http=_offline, cache_dir=cache_dir, offline=True).latest(entry)
+    assert (info.status, info.commit) == ("update_available", "b" * 40)

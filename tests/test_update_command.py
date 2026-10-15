@@ -3,6 +3,7 @@ import dataclasses
 import hashlib
 import io
 import json
+from datetime import datetime, timezone
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -14,6 +15,7 @@ from core.upstream import (
     STATUS_UNKNOWN,
     STATUS_UP_TO_DATE,
     STATUS_UPDATE_AVAILABLE,
+    GithubClient,
     LatestInfo,
 )
 from skill_sync import run_update
@@ -407,8 +409,26 @@ def test_update_commit_kind_without_a_baseline_is_unknown(scratch, dist):
     assert snapshot_tree(entry.plugin_dir) == before
 
 
-def test_update_commit_kind_rebuild_uses_the_pinned_baseline(scratch, dist):
-    entry = dataclasses.replace(commit_entry(scratch), baseline_commit="a" * 40)
+def test_update_commit_kind_rebuild_replays_the_installed_revision(scratch, dist):
+    """``--rebuild`` replays what is installed, not the bootstrap baseline.
+
+    When the two differ, preferring ``baselineCommit`` quietly rewinds the bundle
+    to the bytes of its very first build -- and every check stays green, because
+    the state is rewritten to match the rewind.
+    """
+    entry = dataclasses.replace(commit_entry(scratch), baseline_commit="c" * 40)
+    state.write(
+        entry.plugin_dir,
+        {
+            "package": entry.package,
+            "upstream": entry.repo,
+            "syncedTag": "0.1.1",
+            "syncedCommit": "a" * 40,
+            "syncedAt": "2026-10-15T00:00:00+00:00",
+            "overlayVersion": 1,
+            "skills": {},
+        },
+    )
 
     code = run_update(
         [entry],
@@ -422,7 +442,61 @@ def test_update_commit_kind_rebuild_uses_the_pinned_baseline(scratch, dist):
     )
 
     assert code == 0
-    payload = state.read(entry.plugin_dir)
-    assert payload["syncedCommit"] == "a" * 40
+    assert state.read(entry.plugin_dir)["syncedCommit"] == "a" * 40
     text = (entry.plugin_dir / "skills" / "humanizer-zh" / "SKILL.md").read_text(encoding="utf-8")
     assert "rebuilt body" in text
+
+
+def test_update_commit_kind_queries_upstream_instead_of_a_stale_cache(scratch, dist):
+    """The revision update lands must be one it asked for itself.
+
+    A *fresh* cache is the trap: `check` may have filled it minutes ago, and the
+    branch head can move in between. Landing that cached revision means landing
+    bytes update never looked at -- and the cached sha may already be unreachable
+    server-side. Zero HTTP calls is the failure signature.
+    """
+    entry = commit_entry(scratch)
+    state.write(
+        entry.plugin_dir,
+        {
+            "package": entry.package,
+            "upstream": entry.repo,
+            "syncedTag": "0.1.0",
+            "syncedCommit": "a" * 40,
+            "syncedAt": "2026-10-15T00:00:00+00:00",
+            "overlayVersion": 1,
+            "skills": {},
+        },
+    )
+    cache = scratch / "cache"
+    (cache / "api").mkdir(parents=True)
+    (cache / "api" / f"{entry.repo.replace('/', '__')}.json").write_text(
+        json.dumps(
+            {
+                "repo": entry.repo,
+                "tag": "",
+                "commit": "9" * 40,
+                "fetched_at": datetime.now(timezone.utc).isoformat(),
+            }
+        ),
+        encoding="utf-8",
+    )
+    calls = []
+
+    def _http(url, headers):
+        calls.append(url)
+        return 200, json.dumps({"sha": "b" * 40}).encode("utf-8")
+
+    code = run_update(
+        [entry],
+        GithubClient(http=_http, cache_dir=cache),
+        scratch,
+        upstream_provider=provider(root_upstream(scratch)),
+        dist_dir=dist,
+        pack_runner=fake_pack_runner(),
+        stream=io.StringIO(),
+    )
+
+    assert calls, "update must ask upstream rather than trust a cached revision"
+    assert code == 0
+    assert state.read(entry.plugin_dir)["syncedCommit"] == "b" * 40

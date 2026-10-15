@@ -221,6 +221,7 @@
         "humanizer"
       ],
       "manualSkills": [],
+      "commitPinned": true,
       "license": "MIT",
       "notes": "The English original: one skill file at the repository root, published as tags (v3.1.0 at packaging time), so the bundle version follows the upstream version line. It is a separate project from op7418/Humanizer-zh and does not track it. Only the root SKILL.md ships."
     },

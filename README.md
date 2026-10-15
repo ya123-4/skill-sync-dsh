@@ -35,8 +35,10 @@ compared separately and the pin moves with every rebuild.
 A `github-commits` bundle has no version to show: `check` prints the local and remote
 revisions side by side and compares the remote head with the `syncedCommit` recorded in the
 bundle's own state file — so a bundle that has never been synced reports `unknown`, never
-"up to date". Its own patch version moves on every rebuild, and `--rebuild` replays the
-registry's `baselineCommit` (or the recorded revision) when upstream has nothing new.
+"up to date". A cached answer is never served while online, because a branch head can move
+where a tag cannot (which also makes `--refresh` a no-op for this kind). Its own patch
+version moves on every rebuild, and `--rebuild` replays the revision the state file
+records, falling back to the registry's `baselineCommit` only before the first sync.
 
 ## Commands
 

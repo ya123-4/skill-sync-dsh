@@ -54,7 +54,7 @@ def pinned_ref(entry) -> str:
     if entry.kind == "npm":
         return local_version(entry)
     if entry.kind == "github-commits":
-        return entry.baseline_commit or local_revision(entry) or ""
+        return local_revision(entry) or entry.baseline_commit or ""
     return entry.baseline_commit or f"{entry.tag_prefix}{installed_version(entry)}"
 
 
@@ -376,6 +376,33 @@ def test_humanizer_golden(scratch):
     assert sorted(result.skills) == sorted(entry.expected_skills)
     assert result.manual_skills == []
     assert_tree_identical(staging / "skills", entry.plugin_dir / "skills")
+
+
+def test_pinned_ref_prefers_the_recorded_revision():
+    """A replay targets what is installed; the baseline only bootstraps build one."""
+    import dataclasses
+
+    entry = registry_entry("humanizer-zh-skill-dsh")
+    shifted = dataclasses.replace(entry, baseline_commit="c" * 40)
+
+    assert pinned_ref(shifted) == "f4518a8eab97b8bfebc66a89d34320a89bef6930"
+
+
+def test_snapshot_ref_prefers_the_recorded_revision():
+    """The snapshot fetcher and the golden replay must agree on the revision."""
+    import dataclasses
+    import importlib.util
+
+    spec = importlib.util.spec_from_file_location(
+        "fetch_snapshots", PKG_ROOT / "tools" / "fetch_snapshots.py"
+    )
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+
+    entry = registry_entry("humanizer-zh-skill-dsh")
+    shifted = dataclasses.replace(entry, baseline_commit="c" * 40)
+
+    assert module.snapshot_ref(shifted) == "f4518a8eab97b8bfebc66a89d34320a89bef6930"
 
 
 def test_rea_golden(scratch):

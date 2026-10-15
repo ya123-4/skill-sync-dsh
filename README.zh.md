@@ -32,8 +32,9 @@ DeepSeek Harness 的 skill 插件「上游版本看守」：检查那些由开�
 
 `github-commits` 型的插件没有版本号可显示：`check` 把本地与远端修订并排打印，拿远端 head 与
 插件自己 state 文件里的 `syncedCommit` 比较——所以**从未同步过**的插件报 `unknown`，而绝不会
-报"最新"。它自身的 patch 版本每次重建都前进；上游没有新东西时，`--rebuild` 会重放登记表里的
-`baselineCommit`（或 state 里记录的那个修订）。
+报"最新"。在线时**永不**采用缓存答案：分支 head 会移动，而 tag 不会（这也让 `--refresh` 对该型
+别无作用）。它自身的 patch 版本每次重建都前进；`--rebuild` 重放 state 文件记录的那个修订，
+只有首次同步之前才回落到登记表里的 `baselineCommit`。
 
 ## 命令
 

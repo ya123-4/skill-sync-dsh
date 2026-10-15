@@ -9,7 +9,8 @@ maps to ``structure-changed``).
 Rules, in the order they run here:
 
 1. every skill directory has a ``SKILL.md`` whose frontmatter ``name`` matches the
-   directory and is kebab-case;
+   directory and is kebab-case, and whose ``description`` is present and non-empty
+   (DSH drops a skill that declares neither);
 2. no camelCase frontmatter keys (``disableModelInvocation`` and friends make DSH
    skip the skill);
 3. the skill set matches what was expected: additions, removals and renames are
@@ -65,11 +66,31 @@ def blocking(issues, ignore_codes=()) -> list[Issue]:
 
 
 def frontmatter_name(text: str) -> str | None:
+    return frontmatter_field(text, "name")
+
+
+def frontmatter_description(text: str) -> str | None:
+    """The ``description`` a SKILL.md declares, or None when absent or blank.
+
+    Not cosmetic: DSH drops a skill whose description is missing or empty, so a
+    bundle shipping one loads no skill at all while every check stays green.
+    """
+    return frontmatter_field(text, "description")
+
+
+def frontmatter_field(text: str, key: str) -> str | None:
+    """One top-level frontmatter key's value, or None when absent or empty.
+
+    Only the leading block is read, within the same line budget the DSH loader
+    itself uses. An empty value reads as None, because a key with nothing after
+    the colon is exactly what a loader treats as missing.
+    """
     if not text.startswith("---\n"):
         return None
+    prefix = f"{key}:"
     for line in text.splitlines()[1:15]:
-        if line.startswith("name:"):
-            return line.split(":", 1)[1].strip()
+        if line.startswith(prefix):
+            return line.split(":", 1)[1].strip() or None
         if line.strip() == "---":
             return None
     return None
@@ -135,6 +156,15 @@ def verify_candidate(
                         f"{name}/SKILL.md uses {key}, which DSH rejects",
                     )
                 )
+
+        if frontmatter_description(text) is None:
+            issues.append(
+                Issue(
+                    "missing-description",
+                    SEVERITY_BLOCK,
+                    f"{name}/SKILL.md has no description; DSH would drop the skill",
+                )
+            )
 
     # rule 3
     expected = _expected_names(entry, previous)

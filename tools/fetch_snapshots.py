@@ -49,7 +49,7 @@ def snapshot_ref(entry) -> str:
     if entry.kind == "npm":
         return local_version(entry)
     if entry.kind == "github-commits":
-        return entry.baseline_commit or local_revision(entry) or ""
+        return local_revision(entry) or entry.baseline_commit or ""
     return f"{entry.tag_prefix}{local_version(entry)}"
 
 

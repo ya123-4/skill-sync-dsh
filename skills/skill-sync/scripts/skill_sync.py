@@ -682,7 +682,10 @@ def _update_one(
             ref = info.commit
             target_version = bump_patch(before_version)
         elif rebuild:
-            ref = entry.baseline_commit or local_revision(entry)
+            # Replay what is installed. The registry's baselineCommit only boots
+            # the first build; preferring it would rewind the bundle to its very
+            # first bytes on any later --rebuild, with every check still green.
+            ref = local_revision(entry) or entry.baseline_commit
             if not ref:
                 return UpdateRow(
                     entry.package,

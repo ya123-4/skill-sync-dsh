@@ -56,6 +56,24 @@ def test_frontmatter_name_mismatch_blocks(scratch):
     assert "name-mismatch" in {issue.code for issue in blocking(issues)}
 
 
+def test_skill_without_a_description_blocks(scratch):
+    """DSH drops a skill whose description is empty, so verify must refuse it.
+
+    Landing one exits 0 and reports ok while the skill silently never appears in
+    a session. Written as bytes because ``write_text`` would emit CRLF here and
+    the frontmatter reader looks for a bare ``---\\n``.
+    """
+    entry = make_entry(scratch, expected=("alpha",))
+    skill = scratch / "staging" / "skills" / "alpha"
+    skill.mkdir(parents=True)
+    (skill / "SKILL.md").write_bytes(b"---\nname: alpha\ndescription:\n---\n\nbody\n")
+
+    issues = verify_candidate(scratch / "staging", entry)
+
+    assert "missing-description" in codes(issues)
+    assert "missing-description" in {issue.code for issue in blocking(issues)}
+
+
 def test_legacy_camelcase_frontmatter_blocks(scratch):
     entry = make_entry(scratch)
     staging = make_candidate(scratch, skills={"alpha": "alpha"})

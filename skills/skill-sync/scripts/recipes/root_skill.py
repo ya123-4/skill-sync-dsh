@@ -13,7 +13,7 @@ treatment, that is the moment to split it in two.
 """
 from __future__ import annotations
 
-from core.verify import frontmatter_name
+from core.verify import frontmatter_description, frontmatter_name
 from recipes.base import RecipeContext, RecipeResult, StructureChanged
 
 
@@ -30,11 +30,18 @@ def assemble(context: RecipeContext) -> RecipeResult:
             f"{context.entry.package}: upstream {context.entry.skills_root}/SKILL.md is missing"
         )
 
-    declared = frontmatter_name(source.read_text(encoding="utf-8"))
+    text = source.read_text(encoding="utf-8")
+    declared = frontmatter_name(text)
     if declared != name:
         raise StructureChanged(
             f"{context.entry.package}: upstream SKILL.md declares name {declared!r}, "
             f"expected {name!r}"
+        )
+    if frontmatter_description(text) is None:
+        # DSH would drop this skill entirely, so "update" must not land it: the
+        # recipe fails loudly here instead of shipping a bundle with no skill.
+        raise StructureChanged(
+            f"{context.entry.package}: upstream SKILL.md has no description, which DSH requires"
         )
 
     target = context.staging_dir / "skills" / name

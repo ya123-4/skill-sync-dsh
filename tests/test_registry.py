@@ -135,6 +135,9 @@ def test_humanizer_entries(registry):
     assert (en.kind, en.mode, en.tag_prefix) == ("github-tags", "rebuild", "v")
     assert en.recipe == "root_skill"
     assert en.expected_skills == ("humanizer",)
+    # The tag path needs this to record the commit a tag points at: without it the
+    # state carries no revision, and a re-pointed tag would go unnoticed.
+    assert en.commit_pinned is True
 
 
 def test_select_unknown_package_raises(registry):

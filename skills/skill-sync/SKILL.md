@@ -29,9 +29,11 @@ pin rather than the bundle's own version.
 
 A `github-commits` bundle has no version to compare. `check` asks for the head commit of
 its branch and compares it with the `syncedCommit` recorded in the bundle's own state
-file, so a bundle that has never been synced reports `unknown` — never "up to date". Its
-own patch version moves on every rebuild, and `--rebuild` replays the registry's
-`baselineCommit` (or the recorded revision) when upstream has nothing new.
+file, so a bundle that has never been synced reports `unknown` — never "up to date". A
+cached answer is never served while online, because a branch head can move where a tag
+cannot (which also makes `--refresh` a no-op for this kind). Its own patch version moves
+on every rebuild, and `--rebuild` replays the revision the state file records, falling
+back to the registry's `baselineCommit` only before the first sync.
 
 ## When to use it
 

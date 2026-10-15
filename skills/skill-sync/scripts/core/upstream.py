@@ -177,22 +177,22 @@ class GithubClient:
         """The newest commit on ``entry.branch``, against the bundle's record.
 
         An upstream with no tags has no version to compare, so the revision *is*
-        the release. Everything else -- cache, ``--offline``, rate limits, 404s --
-        behaves exactly as it does for the tag path.
+        the release. ``--offline``, rate limits and 404s behave exactly as they do
+        for the tag path; the one deliberate difference is that a cached answer is
+        never served while online, because a revision -- unlike a tag -- can move.
         """
-        cached = self._read_cache(entry)
-
         if self.offline:
+            cached = self._read_cache(entry)
             commit = (cached or {}).get("commit")
             if isinstance(commit, str) and commit:
                 return self._evaluate_commit(entry, commit, "cache")
             return LatestInfo(STATUS_UNKNOWN, None, None, "offline and no cached result", "cache")
 
-        if cached is not None and not self.refresh and self._is_fresh(cached):
-            commit = cached.get("commit")
-            if isinstance(commit, str) and commit:
-                return self._evaluate_commit(entry, commit, "cache")
-
+        # A tag cannot move, so the tag path may answer from its short-lived cache.
+        # A branch head can move, and ``update`` lands whatever this returns: while
+        # online this asks upstream every time. The cache is still written, because
+        # ``--offline`` needs something to fall back to -- it is a fallback, never
+        # a shortcut.
         try:
             commit = self._query_head_commit(entry)
         except UpstreamError as exc:

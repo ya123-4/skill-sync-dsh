@@ -68,3 +68,18 @@ def test_root_skill_reports_a_missing_upstream_skill_md(scratch):
 
     with pytest.raises(StructureChanged):
         assemble(context(scratch, empty, entry))
+
+
+def test_root_skill_rejects_a_skill_without_a_description(scratch):
+    """DSH drops a skill whose description is empty, so the recipe must refuse it.
+
+    Landing it would exit 0 and verify ok while the skill never appears in a
+    session -- the quietest possible failure.
+    """
+    from recipes.root_skill import assemble
+
+    entry = replace(make_entry(scratch, expected=("humanizer-zh",)), skills_root=".")
+    body = "---\nname: humanizer-zh\ndescription:\n---\n\n正文\n"
+
+    with pytest.raises(StructureChanged):
+        assemble(context(scratch, upstream_skill(scratch, body), entry))
