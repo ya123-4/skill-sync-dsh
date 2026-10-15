@@ -187,6 +187,27 @@
       "notes": "Curated subset assembled from a pinned upstream commit via jsDelivr; atoms are renamed od-* and four scenario skills get synthesised frontmatter. Source material is cached under tmpwork/od-source/<commit>/."
     },
     {
+      "package": "rea-dsh-plugin",
+      "pluginDir": "rea-plugin-build/rea-dsh-plugin",
+      "kind": "npm",
+      "mode": "rebuild",
+      "source": "rea-agents",
+      "upstream": {
+        "skillsRoot": "skills"
+      },
+      "recipe": "rea",
+      "expectedSkills": [
+        "reverse-engineer-anything",
+        "rea-dsh"
+      ],
+      "manualSkills": [
+        "rea-dsh"
+      ],
+      "license": "MIT",
+      "notes": "Upstream publishes its agent skill inside the rea-agents npm package under skills/; the bundle vendors that published copy, and optionalDependencies['rea-agents'] pins the release it came from (the plugin's own 0.1.x line is unrelated to rea-agents 6.x, so the pin -- not the plugin version -- is the comparison baseline). The repository's .agents/skills/ holds a source-shaped copy whose links are repository-relative; it is never the upstream here. The 'Connect only when needed' section is replaced with the DSH wording in recipes/overlays/rea/, and rea-dsh is this plugin's own skill with no upstream counterpart: it is listed in both expectedSkills (it ships in the bundle) and manualSkills (the recipe carries the installed copy over unchanged instead of rebuilding it), the same shape vercel-skills-dsh uses for skills-cli."
+    }
+,
+    {
       "package": "archify-skill-dsh",
       "kind": "github-releases",
       "mode": "snapshot",
@@ -202,6 +223,24 @@
       "manualSkills": [],
       "license": "MIT",
       "notes": "Upstream publishes archify.zip as a release asset and its README states skills/archify/ is a verbatim snapshot of that release: an update replaces that directory wholesale - no recipe, no local edits."
+    },
+    {
+      "package": "ppt-master-skill-dsh",
+      "kind": "github-releases",
+      "mode": "snapshot",
+      "source": "hugohe3/ppt-master",
+      "asset": "ppt-master-skill-{tag}.zip",
+      "assetSubtree": "ppt-master/skills/ppt-master",
+      "upstream": {
+        "tagPrefix": "v"
+      },
+      "pluginDir": "ppt-master-plugin-build",
+      "expectedSkills": [
+        "ppt-master"
+      ],
+      "manualSkills": [],
+      "license": "MIT",
+      "notes": "Upstream publishes one release asset per version, and its name carries that version (ppt-master-skill-v6.7.0.zip), so the declared asset uses a {tag} placeholder; the asset wraps the payload one level deeper - ppt-master/skills/ppt-master/ - which assetSubtree unwraps. The payload ships byte-for-byte, including SPONSORS.md and the attribution gate, so an update replaces skills/ppt-master/ wholesale: no recipe, no local edits."
     },
     {
       "package": "dsh-better-sidebar",
@@ -234,6 +273,5 @@
       "source": "dshmarket",
       "license": "unknown",
       "notes": "Third-party plugin installed from npm; a registry front-end for DSH plugins."
-    }
-  ]
+    }  ]
 }

@@ -66,12 +66,31 @@ def default_http(url: str, headers: dict) -> tuple[int, bytes]:
 
 
 def local_version(entry: Entry) -> str:
-    """Version currently declared by the installed bundle."""
+    """The upstream version the installed bundle is built from.
+
+    For a GitHub-tagged bundle that is the bundle's own version. A bundle whose
+    skills come from an npm package on a *different* version line declares the
+    version it vendored in ``optionalDependencies`` -- rea-dsh-plugin ships skills
+    from rea-agents 6.x while the plugin itself is 0.1.x -- so that pin is the
+    baseline every comparison and rebuild must use. Comparing the plugin's own
+    0.1.x against rea-agents 6.x would be meaningless, which is why this entry
+    shape is refused anywhere the pin is missing.
+    """
     manifest = entry.plugin_dir / "package.json"
     try:
         payload = json.loads(manifest.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError) as exc:
         raise UpstreamError(f"{entry.package}: cannot read {manifest}: {exc}") from exc
+
+    if entry.kind == "npm" and entry.mode == "rebuild":
+        pinned = (payload.get("optionalDependencies") or {}).get(entry.source)
+        if not isinstance(pinned, str) or not pinned:
+            raise UpstreamError(
+                f"{entry.package}: {manifest} has no optionalDependencies[{entry.source!r}] "
+                "pinning the vendored upstream version"
+            )
+        return pinned
+
     version = payload.get("version")
     if not isinstance(version, str) or not version:
         raise UpstreamError(f"{entry.package}: {manifest} has no version")
@@ -294,6 +313,23 @@ def snapshot_slug(repo: str, ref: str) -> str:
     return f"{repo.replace('/', '__')}__{re.sub(r'[^A-Za-z0-9._-]+', '_', ref)}"
 
 
+NPM_REGISTRY_ROOT = "https://registry.npmjs.org"
+
+
+def npm_tarball_url(package: str, version: str) -> str:
+    """Registry tarball URL for one published version.
+
+    No API quota is involved, and the payload has the same shape as a codeload
+    tarball: a single top-level directory (``package/``) holding the published
+    tree, so unpacking and validation are shared with the GitHub path.
+    """
+    return f"{NPM_REGISTRY_ROOT}/{package}/-/{package}-{version}.tgz"
+
+
+def npm_snapshot_slug(package: str, version: str) -> str:
+    return f"npm__{package.replace('/', '__')}__{version}"
+
+
 def fetch_snapshot(
     entry: Entry,
     ref: str,
@@ -302,18 +338,57 @@ def fetch_snapshot(
     attempts: int = 3,
     sleep: Callable[[float], None] | None = None,
 ) -> Path:
-    """Download (once) and unpack ``repo@ref``; return the checkout directory.
+    """Download (once) and unpack ``repo@ref``; return the checkout directory."""
+    return _fetch_tarball(
+        url=snapshot_url(entry.repo, ref),
+        slug=snapshot_slug(entry.repo, ref),
+        label=f"{entry.repo}@{ref}",
+        cache_dir=Path(cache_dir),
+        http=http,
+        attempts=attempts,
+        sleep=sleep,
+    )
 
-    codeload tarballs wrap everything in a single top-level directory
-    (``<repo>-<ref>``); a download that does not unpack to exactly one such
-    directory is rejected rather than half-used.
+
+def fetch_npm_snapshot(
+    entry: Entry,
+    version: str,
+    cache_dir: Path | str,
+    http: HttpCallable | None = None,
+    attempts: int = 3,
+    sleep: Callable[[float], None] | None = None,
+) -> Path:
+    """Download (once) and unpack ``<source>@<version>`` from the npm registry."""
+    return _fetch_tarball(
+        url=npm_tarball_url(entry.source, version),
+        slug=npm_snapshot_slug(entry.source, version),
+        label=f"{entry.source}@{version}",
+        cache_dir=Path(cache_dir),
+        http=http,
+        attempts=attempts,
+        sleep=sleep,
+    )
+
+
+def _fetch_tarball(
+    url: str,
+    slug: str,
+    label: str,
+    cache_dir: Path,
+    http: HttpCallable | None = None,
+    attempts: int = 3,
+    sleep: Callable[[float], None] | None = None,
+) -> Path:
+    """Download and unpack one tarball into a cached, single-top-directory tree.
+
+    Both upstream kinds land here: codeload wraps a repository in
+    ``<repo>-<ref>/`` and npm wraps a package in ``package/``. A download that
+    does not produce exactly one such directory is rejected rather than half-used.
 
     Transport failures are retried (see ``_download``): this host's TLS
     middlebox truncates larger responses, and one flaky read must not cost a
     whole rebuild.
     """
-    cache_dir = Path(cache_dir)
-    slug = snapshot_slug(entry.repo, ref)
     root = cache_dir / "snapshots" / slug
     marker = root / SNAPSHOT_MARKER
 
@@ -326,16 +401,15 @@ def fetch_snapshot(
     _remove_tree(root)  # drop the corpse of any earlier failed attempt
     root.mkdir(parents=True, exist_ok=True)
 
-    url = snapshot_url(entry.repo, ref)
     try:
         status, body = _download(http or default_http, url, attempts=attempts, sleep=sleep)
     except SnapshotError as exc:
         _remove_tree(root)
-        raise SnapshotError(f"{entry.repo}@{ref}: {exc}") from exc
+        raise SnapshotError(f"{label}: {exc}") from exc
 
     if status != 200:
         _remove_tree(root)
-        raise SnapshotError(f"{entry.repo}@{ref}: download failed with HTTP {status} ({url})")
+        raise SnapshotError(f"{label}: download failed with HTTP {status} ({url})")
 
     tarball = cache_dir / "tarballs" / f"{slug}.tar.gz"
     tarball.parent.mkdir(parents=True, exist_ok=True)
@@ -349,14 +423,14 @@ def fetch_snapshot(
                 archive.extractall(root)
     except tarfile.TarError as exc:
         _remove_tree(root)
-        raise SnapshotError(f"{entry.repo}@{ref}: not a usable gzip tarball: {exc}") from exc
+        raise SnapshotError(f"{label}: not a usable gzip tarball: {exc}") from exc
 
     checkout = _single_top_dir(root)
     if checkout is None:
         _remove_tree(root)
-        raise SnapshotError(f"{entry.repo}@{ref}: tarball has no single top-level directory")
+        raise SnapshotError(f"{label}: tarball has no single top-level directory")
 
-    marker.write_text(f"{entry.repo}@{ref}\n", encoding="utf-8")
+    marker.write_text(f"{label}\n", encoding="utf-8")
     return checkout
 
 

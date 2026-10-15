@@ -14,9 +14,20 @@ open-source skill repositories — and rebuilds them when upstream moves.
 | `superpowers-skill-dsh` | `obra/superpowers` | tag `vX.Y.Z` |
 | `mattpocock-skills-dsh` | `mattpocock/skills` | commit `49dd158d…` (see `KNOWN_DEVIATIONS.md`) |
 | `open-design-skills-dsh` | `nexu-io/open-design` | tag `open-design-vX.Y.Z` + commit, material fetched per file |
+| `rea-dsh-plugin` | npm package `rea-agents` | registry tarball at the version its `optionalDependencies` pins; skill bodies in the package's `skills/` |
+| `archify-skill-dsh` | `tt-a1i/archify` | release asset `archify.zip`; replaces `skills/archify/` wholesale (snapshot) |
+| `ppt-master-skill-dsh` | `hugohe3/ppt-master` | release asset `ppt-master-skill-{tag}.zip` (the asset name carries the version, hence the `{tag}` placeholder); `assetSubtree` unwraps the `ppt-master/skills/ppt-master/` layer (snapshot) |
 
-Coverage is data, not code: one entry in `skills/skill-sync/data/registry.json` plus one
-recipe module in `skills/skill-sync/scripts/recipes/` manages another bundle.
+Coverage is data, not code: one entry in `skills/skill-sync/data/registry.json` manages
+another bundle — plus one recipe module in `skills/skill-sync/scripts/recipes/` for a
+`rebuild` entry. A `snapshot` entry needs no recipe: upstream publishes the finished asset,
+and `assetSubtree` names the tree inside it that is the payload.
+
+A `rebuild` entry pairs with `kind: github-tags` (a repository) or `kind: npm` (a published
+package). The npm form needs only `skillsRoot`, and its version baseline is the pin in the
+bundle's `optionalDependencies`: `rea-dsh-plugin` ships rea-agents 6.x skills while the
+plugin itself is 0.1.x, so the two version lines are compared separately and the pin moves
+with every rebuild.
 
 ## Commands
 

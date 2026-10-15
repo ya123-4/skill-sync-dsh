@@ -155,3 +155,108 @@ def test_extract_subtree_refuses_a_member_that_climbs_out(scratch):
     archive = make_zip(scratch / "e.zip", {"archify/sub/../../escape.txt": "boom"})
     with pytest.raises(ReleaseError):
         extract_subtree(archive, "archify", scratch / "out-climb")
+
+
+# ---- ppt-master 的形态：资产名带版本号，载荷多包一层 ----------------------
+
+
+def ppt_master_entry(scratch, version="6.7.0") -> Entry:
+    plugin = scratch / "ppt-master-plugin-build"
+    skill = plugin / "skills" / "ppt-master"
+    skill.mkdir(parents=True)
+    (skill / "SKILL.md").write_text(
+        "---\nname: ppt-master\ndescription: old\n---\n\nold body\n", encoding="utf-8"
+    )
+    (plugin / "package.json").write_text(
+        json.dumps({"name": "ppt-master-skill-dsh", "version": version, "description": "demo"}),
+        encoding="utf-8",
+    )
+    return Entry(
+        package="ppt-master-skill-dsh",
+        plugin_dir=plugin,
+        repo="hugohe3/ppt-master",
+        tag_prefix="v",
+        skills_root="",
+        strip_prefix="",
+        recipe="",
+        expected_skills=("ppt-master",),
+        manual_skills=(),
+        commit_pinned=False,
+        license="MIT",
+        notes="",
+        kind="github-releases",
+        mode="snapshot",
+        source="hugohe3/ppt-master",
+        asset="ppt-master-skill-{tag}.zip",
+        asset_subtree="ppt-master/skills/ppt-master",
+    )
+
+
+def test_release_asset_name_expands_the_tag_placeholder(scratch):
+    """`{tag}` 让"资产名内含版本"的上游也能登记成一条静态 registry 数据。"""
+    from core.release import fetch_release_asset
+
+    calls: list = []
+
+    def fake_http(url):
+        calls.append(url)
+        return b"payload"
+
+    path = fetch_release_asset(
+        "hugohe3/ppt-master",
+        "v6.7.0",
+        "ppt-master-skill-{tag}.zip",
+        scratch / "cache",
+        http=fake_http,
+    )
+
+    assert calls == [
+        "https://github.com/hugohe3/ppt-master/releases/download/v6.7.0/"
+        "ppt-master-skill-v6.7.0.zip"
+    ]
+    assert path.name.endswith("ppt-master-skill-v6.7.0.zip")
+    assert path.read_bytes() == b"payload"
+
+
+def test_update_snapshot_unwraps_a_nested_asset(scratch, monkeypatch):
+    """ppt-master 的资产把载荷放在 ppt-master/skills/ 下，assetSubtree 负责剥掉这层。"""
+    entry = ppt_master_entry(scratch)
+    archive = make_zip(
+        scratch / "ppt.zip",
+        {
+            "ppt-master/skills/ppt-master/SKILL.md": (
+                "---\nname: ppt-master\ndescription: new\n---\n\nnew body\n"
+            ),
+            "ppt-master/skills/ppt-master/references/x.md": "ref\n",
+            "ppt-master/README.md": "not part of the skill\n",
+        },
+    )
+    seen: dict = {}
+
+    def fake_fetch(repo, tag, asset, cache_dir, http=None):
+        seen["asset"] = asset
+        return archive
+
+    monkeypatch.setattr(skill_sync, "fetch_release_asset", fake_fetch)
+    dist = scratch / "dist"
+    stream = io.StringIO()
+
+    code = run_update(
+        [entry],
+        FakeClient(status="update_available", tag="v6.7.1"),
+        scratch,
+        dist_dir=dist,
+        pack_runner=fake_pack_runner(),
+        stream=stream,
+    )
+    text = stream.getvalue()
+
+    assert code == 0, text
+    landed = entry.plugin_dir / "skills" / "ppt-master"
+    assert "new body" in (landed / "SKILL.md").read_text(encoding="utf-8")
+    assert (landed / "references" / "x.md").is_file()
+    # 前缀之外的内容（资产里的 ppt-master/README.md）不得越界落进来
+    assert not (landed / "README.md").exists()
+    assert (dist / "ppt-master-skill-dsh-6.7.1.tgz").is_file()
+    # registry 保留占位符原文；展开只发生在 core.release
+    assert seen["asset"] == "ppt-master-skill-{tag}.zip"

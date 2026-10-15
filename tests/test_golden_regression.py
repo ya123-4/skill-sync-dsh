@@ -16,7 +16,13 @@ from pathlib import Path
 import pytest
 
 from core.registry import load
-from core.upstream import fetch_snapshot, snapshot_slug
+from core.upstream import (
+    fetch_npm_snapshot,
+    fetch_snapshot,
+    local_version,
+    npm_snapshot_slug,
+    snapshot_slug,
+)
 from recipes.base import RecipeContext
 
 PKG_ROOT = Path(__file__).resolve().parent.parent
@@ -38,13 +44,27 @@ def pinned_ref(entry) -> str:
     """The upstream revision the installed bytes came from.
 
     Normally the tag matching the bundle's own version; for a bundle built from a
-    mid-branch snapshot (see KNOWN_DEVIATIONS.md) the recorded commit instead.
+    mid-branch snapshot (see KNOWN_DEVIATIONS.md) the recorded commit instead. A
+    bundle vendoring an npm package is pinned by its ``optionalDependencies``
+    entry, because its own version line is unrelated to the package's.
     """
+    if entry.kind == "npm":
+        return local_version(entry)
     return entry.baseline_commit or f"{entry.tag_prefix}{installed_version(entry)}"
 
 
 def snapshot_for(entry) -> Path:
     ref = pinned_ref(entry)
+    if entry.kind == "npm":
+        slug = npm_snapshot_slug(entry.source, ref)
+        root = SNAPSHOT_CACHE / "snapshots" / slug
+        if not (root / ".complete").is_file():
+            pytest.skip(
+                f"missing npm snapshot for {entry.package}@{ref}; "
+                f"run: python tools/fetch_snapshots.py --only {entry.package}"
+            )
+        return fetch_npm_snapshot(entry, ref, SNAPSHOT_CACHE)
+
     root = SNAPSHOT_CACHE / "snapshots" / snapshot_slug(entry.repo, ref)
     if not (root / ".complete").is_file():
         pytest.skip(
@@ -316,3 +336,44 @@ def test_open_design_synthesizes_frontmatter_for_body_only_scenarios(scratch):
         assert text.startswith("---\n"), name
         assert f"name: {name}" in text, name
         assert "description:" in text, name
+
+
+def test_rea_golden(scratch):
+    from recipes.rea import assemble
+
+    entry = registry_entry("rea-dsh-plugin")
+    staging = scratch / "staging"
+    staging.mkdir()
+
+    result = assemble(context_for(entry, staging))
+
+    assert sorted(result.skills) == sorted(entry.expected_skills)
+    assert result.manual_skills == ["rea-dsh"]
+    assert_tree_identical(staging / "skills", entry.plugin_dir / "skills")
+
+
+def test_rea_reports_a_moved_connect_section(scratch):
+    """A section that no longer sits where the overlay expects is an error, not a patch."""
+    from recipes.base import AnchorNotFound
+    from recipes.rea import assemble
+
+    entry = registry_entry("rea-dsh-plugin")
+    upstream = scratch / "upstream" / entry.skills_root / "reverse-engineer-anything"
+    upstream.mkdir(parents=True)
+    (upstream / "SKILL.md").write_text(
+        "---\nname: reverse-engineer-anything\ndescription: fixture\n---\n\n"
+        "## Connect only when needed\n\nupstream text\n",
+        encoding="utf-8",
+    )
+    staging = scratch / "staging"
+    staging.mkdir()
+
+    context = RecipeContext(
+        upstream_dir=scratch / "upstream",
+        upstream_ref="fixture",
+        plugin_dir=entry.plugin_dir,
+        staging_dir=staging,
+        entry=entry,
+    )
+    with pytest.raises(AnchorNotFound):
+        assemble(context)

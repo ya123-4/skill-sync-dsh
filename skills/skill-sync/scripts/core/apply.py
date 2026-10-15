@@ -35,8 +35,14 @@ def apply_candidate(
     backup_root: Path | str | None = None,
     fail_after: int | None = None,
     fail_with: type[BaseException] = RuntimeError,
+    dependency_bump: tuple[str, str] | None = None,
 ) -> Path:
     """Install ``staging_skills`` as ``<plugin>/skills`` and bump the version.
+
+    ``dependency_bump`` is ``(name, version)`` for a bundle that vendors an npm
+    package: the manifest's ``optionalDependencies[name]`` pin is what records
+    which upstream release the shipped skills came from, so a landing that leaves
+    it behind would advertise the old upstream forever.
 
     Returns the backup directory (kept on success, removed on failure).
     """
@@ -73,7 +79,7 @@ def apply_candidate(
         shutil.move(str(incoming), str(skills_target))
         _checkpoint(fail_after, 2, fail_with)
 
-        previous_version = _bump_manifest(manifest, version)
+        previous_version = _bump_manifest(manifest, version, dependency_bump)
         _bump_docs(plugin_dir, previous_version, version)
         _checkpoint(fail_after, 3, fail_with)
     except BaseException as exc:  # noqa: BLE001 - interrupts must roll back too
@@ -104,11 +110,15 @@ def _checkpoint(fail_after: int | None, step: int, fail_with: type[BaseException
         raise fail_with(f"injected failure after step {step}")
 
 
-def _bump_manifest(manifest: Path, version: str) -> str:
-    """Rewrite ``version`` and the version reference inside ``description``.
+def _bump_manifest(
+    manifest: Path, version: str, dependency: tuple[str, str] | None = None
+) -> str:
+    """Rewrite ``version`` (and the description's version reference) in place.
 
     A textual replacement keeps the author's formatting; parsing and re-dumping
-    the JSON would reflow the whole file. Returns the version that was replaced.
+    the JSON would reflow the whole file. When ``dependency`` is given, the
+    ``optionalDependencies`` pin for that package moves in the same pass. Returns
+    the version that was replaced.
     """
     text = manifest.read_text(encoding="utf-8")
     try:
@@ -119,26 +129,41 @@ def _bump_manifest(manifest: Path, version: str) -> str:
     previous = str(payload.get("version", ""))
     if not previous:
         raise ApplyFailed(f"{manifest}: no version field to replace")
-    if previous == version:
-        # A rebuild of the same version has nothing to rewrite, so it must not fail
-        # on a manifest whose formatting the textual marker does not match.
-        return previous
 
-    marker = f'"version": "{previous}"'
-    if marker not in text:
-        raise ApplyFailed(
-            f"{manifest}: cannot rewrite version {previous} - the manifest is not in the "
-            "expected shape, and landing it would publish a stale version"
-        )
-    updated = text.replace(marker, f'"version": "{version}"', 1)
+    updated = text
+
+    if dependency is not None:
+        name, pin = dependency
+        current = (payload.get("optionalDependencies") or {}).get(name)
+        if not isinstance(current, str) or not current:
+            raise ApplyFailed(f"{manifest}: no optionalDependencies[{name!r}] pin to update")
+        if current != pin:
+            marker = f'"{name}": "{current}"'
+            if marker not in updated:
+                raise ApplyFailed(
+                    f"{manifest}: cannot rewrite optionalDependencies[{name!r}] {current} - the "
+                    "manifest is not in the expected shape, and landing it would advertise a "
+                    "stale upstream version"
+                )
+            updated = updated.replace(marker, f'"{name}": "{pin}"', 1)
+
     if previous != version:
+        marker = f'"version": "{previous}"'
+        if marker not in updated:
+            raise ApplyFailed(
+                f"{manifest}: cannot rewrite version {previous} - the manifest is not in the "
+                "expected shape, and landing it would publish a stale version"
+            )
+        updated = updated.replace(marker, f'"version": "{version}"', 1)
         updated = re.sub(
             r'("description"\s*:\s*")([^"]*)"',
             lambda match: match.group(1) + match.group(2).replace(previous, version) + '"',
             updated,
             count=1,
         )
-    manifest.write_bytes(updated.encode("utf-8"))
+
+    if updated != text:
+        manifest.write_bytes(updated.encode("utf-8"))
     return previous
 
 

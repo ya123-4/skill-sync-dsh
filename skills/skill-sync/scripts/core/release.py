@@ -33,7 +33,13 @@ def fetch_release_asset(
     cache_dir: Path | str,
     http=None,
 ) -> Path:
-    """Download a release asset once and reuse it; returns the local file."""
+    """Download a release asset once and reuse it; returns the local file.
+
+    Some upstreams put the version inside the asset name (ppt-master ships
+    ``ppt-master-skill-v6.7.0.zip``), so a literal ``{tag}`` in the declared name
+    is substituted with the release tag before the URL and the cache key are built.
+    """
+    asset = asset.replace("{tag}", tag)
     target = asset_path(cache_dir, repo, tag, asset)
     if target.is_file() and target.stat().st_size > 0:
         return target

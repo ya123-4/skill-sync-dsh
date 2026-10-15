@@ -1,6 +1,6 @@
 {
   "name": "skill-sync-dsh",
-  "version": "0.2.2",
+  "version": "0.3.0",
   "description": "DeepSeek Harness skill bundle that checks the upstream skill version of skill plugins built from open-source skill repositories and rebuilds them into installable tarballs. Skill-only bundle; the update path never touches the profile.",
   "license": "MIT",
   "type": "module",
@@ -31,7 +31,8 @@
     "skill-update"
   ],
   "scripts": {
-    "pack": "npm pack"
+    "pack": "npm pack",
+    "prepack": "node -e \"const fs=require('fs'),path=require('path');let n=0;const walk=d=>{for(const e of fs.readdirSync(d,{withFileTypes:true})){const f=path.join(d,e.name);if(e.isDirectory()){if(e.name==='__pycache__'){fs.rmSync(f,{recursive:true,force:true});n++;}else walk(f);}else if(/\\.py[co]$/.test(e.name)){fs.unlinkSync(f);n++;}}};walk('skills');console.log(n?'[prepack] removed '+n+' python bytecode artifact(s)':'[prepack] no python bytecode to remove');\""
   },
   "dsh": {
     "bundle": {

@@ -44,6 +44,9 @@ class Entry:
     mode: str = "rebuild"
     source: str = ""
     asset: str = ""
+    # snapshot 型：资产内部要提取的前缀。留空表示资产顶层就是 skill 目录
+    # （archify 的形态）；ppt-master 的资产多包了一层，写 "ppt-master/skills"。
+    asset_subtree: str = ""
 
     @property
     def is_rebuild(self) -> bool:
@@ -127,9 +130,13 @@ def _build_entry(item: dict, workspace: Path) -> Entry:
 
     upstream = item.get("upstream") or {}
 
-    # rebuild 型：上游是 skill 仓库，需要完整的 upstream 描述与配方。
+    # rebuild 型：上游是一棵 skill 树，需要 upstream 描述与配方。
+    # github-tags 的上游是仓库 + tag 前缀；npm 的上游是一个 npm 包，它把已发布的
+    # skill 放在包内的 skillsRoot 下，版本由插件的 optionalDependencies 钉住
+    # （见 core.upstream.local_version），所以只需要 skillsRoot。
     if mode == "rebuild":
-        for key in _REQUIRED_UPSTREAM_KEYS:
+        required = ("skillsRoot",) if kind == "npm" else _REQUIRED_UPSTREAM_KEYS
+        for key in required:
             if key not in upstream:
                 raise RegistryError(f"{label}: upstream is missing {key!r}")
         expected = tuple(item.get("expectedSkills") or ())
@@ -146,8 +153,10 @@ def _build_entry(item: dict, workspace: Path) -> Entry:
             raise RegistryError(f"{label}: no package.json under {plugin_dir}")
 
     # kind 与 mode 必须互相兼容：registry 不接受"能加载、但一跑就崩"的组合。
-    if mode == "rebuild" and kind != "github-tags":
-        raise RegistryError(f"{label}: mode 'rebuild' needs kind 'github-tags', got {kind!r}")
+    if mode == "rebuild" and kind not in ("github-tags", "npm"):
+        raise RegistryError(
+            f"{label}: mode 'rebuild' needs kind 'github-tags' or 'npm', got {kind!r}"
+        )
     if mode == "snapshot":
         if kind != "github-releases":
             raise RegistryError(
@@ -171,18 +180,17 @@ def _build_entry(item: dict, workspace: Path) -> Entry:
     source = item.get("source") or ""
     if kind == "npm" and not source:
         raise RegistryError(f"{label}: kind 'npm' needs 'source' (the package name)")
-    if kind == "npm" and item.get("pluginDir"):
+    if kind == "npm" and mode == "manual" and item.get("pluginDir"):
         raise RegistryError(
-            f"{label}: kind 'npm' must not declare pluginDir -- its bytes live in the "
-            "profile, which this tool never writes"
+            f"{label}: a manual npm entry must not declare pluginDir -- its bytes live in "
+            "the profile, which this tool never writes"
         )
     if kind != "npm" and not (source or upstream.get("repo")):
         raise RegistryError(f"{label}: kind {kind!r} needs 'source' or upstream.repo")
     if mode == "manual" and kind != "npm":
-        # The spec's rea-dsh-plugin shape. Its upstream version line (rea-agents-6.x)
-        # does not compare with the plugin's own version (0.1.x), so it needs a
-        # dedicated mapping -- until then, refuse it instead of producing a
-        # meaningless verdict or a TypeError on the first run.
+        # 只读看门型只能比较 npm 的版本号；上游在别处的包走 rebuild 条目并配自己的
+        # 版本映射（rea-dsh-plugin 就是这种：kind 'npm' + mode 'rebuild'，上游版本线
+        # 6.x 由 optionalDependencies 钉住，插件自身版本线 0.1.x 独立自增）。
         raise RegistryError(
             f"{label}: mode 'manual' currently supports only kind 'npm'; "
             f"{kind!r} needs its own version mapping first"
@@ -206,4 +214,5 @@ def _build_entry(item: dict, workspace: Path) -> Entry:
         mode=mode,
         source=source,
         asset=item.get("asset", ""),
+        asset_subtree=item.get("assetSubtree", ""),
     )

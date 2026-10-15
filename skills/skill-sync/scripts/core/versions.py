@@ -57,3 +57,21 @@ def is_newer(local: str, remote: str) -> bool:
     padded_local = local_parts + (0,) * (width - len(local_parts))
     padded_remote = remote_parts + (0,) * (width - len(remote_parts))
     return padded_remote > padded_local
+
+
+def bump_patch(version: str) -> str:
+    """The next patch release on a bundle's *own* version line.
+
+    Most bundles take the upstream version as their own, because the upstream tag
+    prefix lines up with the plugin's numbering. A bundle that vendors an npm
+    package on a different line -- rea-dsh-plugin ships skills from rea-agents 6.x
+    while the plugin itself is 0.1.x -- cannot: a rebuild still has to be a new
+    release, so its own patch number moves instead and the upstream pin is updated
+    separately.
+    """
+    parts = normalize_version(version)
+    if parts is None:
+        raise ValueError(f"not a version: {version!r}")
+    core = list(parts) + [0] * max(0, 3 - len(parts))
+    core[2] += 1
+    return ".".join(str(part) for part in core[:3])

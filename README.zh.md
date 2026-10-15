@@ -14,9 +14,18 @@ DeepSeek Harness 的 skill 插件「上游版本看守」：检查那些由开�
 | `superpowers-skill-dsh` | `obra/superpowers` | tag `vX.Y.Z` |
 | `mattpocock-skills-dsh` | `mattpocock/skills` | commit `49dd158d…`（见 `KNOWN_DEVIATIONS.md`） |
 | `open-design-skills-dsh` | `nexu-io/open-design` | tag `open-design-vX.Y.Z` + commit，素材逐文件抓取 |
+| `rea-dsh-plugin` | npm 包 `rea-agents` | 该包的 registry tarball，版本取插件 `optionalDependencies` 里的钉版；skill 正文在包内 `skills/` |
+| `archify-skill-dsh` | `tt-a1i/archify` | release 资产 `archify.zip`，整体替换 `skills/archify/`（snapshot） |
+| `ppt-master-skill-dsh` | `hugohe3/ppt-master` | release 资产 `ppt-master-skill-{tag}.zip`（资产名含版本，用 `{tag}` 占位），`assetSubtree` 剥掉 `ppt-master/skills/ppt-master/` 这层（snapshot） |
 
 覆盖面是数据而不是代码：新增一个被管插件 = 在 `skills/skill-sync/data/registry.json` 加一条登记
-+ 在 `skills/skill-sync/scripts/recipes/` 加一个配方模块。
+（`rebuild` 型再加一个 `skills/skill-sync/scripts/recipes/` 配方模块；`snapshot` 型不需要配方，
+上游直接发布成品资产，`assetSubtree` 负责说明资产里哪棵树是载荷）。
+
+`rebuild` 条目的 `kind` 可以是 `github-tags`（上游是仓库，按 tag 重建）或 `npm`（上游是已发布
+的包，按其 registry tarball 重建）：npm 型只需 `skillsRoot`，比较基准取插件
+`optionalDependencies` 里的钉版——`rea-dsh-plugin` 装的是 rea-agents 6.x 的 skill，而插件自身
+是 0.1.x，两条版本线各自演进，钉版随每次重建一起前进。
 
 ## 命令
 

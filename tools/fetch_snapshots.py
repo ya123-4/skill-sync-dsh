@@ -23,14 +23,28 @@ if str(SCRIPTS_DIR) not in sys.path:
 
 from core.exitcodes import EXIT_OK, EXIT_SELFCHECK, EXIT_UPSTREAM  # noqa: E402
 from core.registry import RegistryError, load, resolve_workspace, select  # noqa: E402
-from core.upstream import SnapshotError, fetch_snapshot, local_version, snapshot_slug  # noqa: E402
+from core.upstream import (  # noqa: E402
+    SnapshotError,
+    fetch_npm_snapshot,
+    fetch_snapshot,
+    local_version,
+    npm_snapshot_slug,
+    snapshot_slug,
+)
 
 sys.stdout.reconfigure(encoding="utf-8", errors="replace")
 sys.stderr.reconfigure(encoding="utf-8", errors="replace")
 
 
 def snapshot_ref(entry) -> str:
-    """The tag the installed bundle was built from: prefix + its own version."""
+    """The upstream revision the installed bundle was built from.
+
+    A GitHub-tagged bundle: tag prefix + its own version. A bundle vendoring an npm
+    package: the release its ``optionalDependencies`` pin names, because the
+    plugin's own version line is unrelated to the package's.
+    """
+    if entry.kind == "npm":
+        return local_version(entry)
     return f"{entry.tag_prefix}{local_version(entry)}"
 
 
@@ -54,10 +68,19 @@ def main(argv: list[str] | None = None) -> int:
     failures = 0
     for entry in entries:
         ref = snapshot_ref(entry)
+        slug = (
+            npm_snapshot_slug(entry.source, ref)
+            if entry.kind == "npm"
+            else snapshot_slug(entry.repo, ref)
+        )
         if args.refresh:
-            shutil.rmtree(cache / "snapshots" / snapshot_slug(entry.repo, ref), ignore_errors=True)
+            shutil.rmtree(cache / "snapshots" / slug, ignore_errors=True)
         try:
-            checkout = fetch_snapshot(entry, ref, cache)
+            checkout = (
+                fetch_npm_snapshot(entry, ref, cache)
+                if entry.kind == "npm"
+                else fetch_snapshot(entry, ref, cache)
+            )
         except SnapshotError as exc:
             print(f"FAIL {entry.package} @ {ref}: {exc}")
             failures += 1

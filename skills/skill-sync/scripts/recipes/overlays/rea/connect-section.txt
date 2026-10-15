@@ -1,0 +1,51 @@
+## Connect only when needed
+
+Adapted for the DeepSeek Harness bundle: the `rea-dsh-plugin` install registers
+this skill and the REA MCP server together, so `mcp__rea__*` tools are normally
+present from the first message. Upstream copies of this skill registered
+nothing by themselves; the client setup steps are replaced below.
+
+If REA tools are available and their registration is not known to be stale,
+proceed directly to the target. Do not run diagnostics or setup before every
+investigation. Use the connected server's actual tool list and input schemas;
+a skill may describe capabilities absent from the REA release that is running.
+Keep complete inline Evidence when that server does not advertise retained
+references.
+
+When tools are absent:
+
+1. Diagnose without changing files. Run
+   `node "<plugin>/lib/launcher.mjs" --plan` to see which runtime the plugin
+   found, then `npx -y rea-agents@{version} doctor --json` for host readiness. Load
+   the `rea-dsh` skill for the harness-side procedure.
+2. Distinguish the reason. A launcher that found no REA needs a runtime
+   install; an aligned runtime with no tools in the session needs a harness
+   reload or a look at the MCP launch error; and a missing provider affects
+   only tasks requiring that provider: static JavaScript inspection needs
+   neither Hopper nor Ghidra, and Android inspection has separate
+   bring-your-own JADX/Java prerequisites.
+3. Repair the runtime, not this skill: reinstall the plugin so its bundled
+   `rea-agents` dependency resolves, install `rea-agents` globally, or set
+   `REA_AGENTS_ENTRY` to the package root, then reload the harness.
+4. Verify that REA tools actually appear in the session, then resume the
+   original investigation. If they remain absent, inspect the MCP launch error
+   rather than repeating the repair.
+
+REA never installs or upgrades Node.js, npm, Homebrew, Java, Ghidra, IDA, JADX,
+Binwalk, or Unblob. Use existing prerequisites; do not install unrelated
+software to repair
+MCP registration. Where the harness cannot run the MCP server at all, continue
+through the version-pinned CLI.
+
+A concrete CLI fallback for an operator-supplied JavaScript tree or ASAR is:
+
+```bash
+npx -y rea-agents@{version} analyze-javascript-application /absolute/path/to/app --json
+```
+
+No MCP registration or native engine is required. Read the returned Evidence,
+graph, limitations, and unknowns with the same care as an MCP result; the CLI
+returns the Evidence record directly. This fallback does not establish that
+MCP is configured. Native CLI tasks still require their selected engine.
+
+## Route the target first

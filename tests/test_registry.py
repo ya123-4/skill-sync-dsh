@@ -8,14 +8,18 @@ from core.registry import RegistryError, load, resolve_workspace, select
 WORKSPACE = Path(__file__).resolve().parents[3]
 NOWHERE = Path("C:/definitely-not-a-workspace-xyz")
 
-# 前五个从 skill 仓库重建（rebuild），后五个跟随上游发布（follow）。
+# 六个 rebuild：前五个的上游是 GitHub 仓库的 tag，rea-dsh-plugin 的上游是 npm 包
+# rea-agents（版本线由 optionalDependencies 钉住）。其余跟随上游发布：archify 与
+# ppt-master 是 snapshot（整体替换 release 资产），剩下的是 npm manual（只报告，不落盘）。
 EXPECTED_PACKAGES = [
     "agent-browser-skill-dsh",
     "vercel-skills-dsh",
     "superpowers-skill-dsh",
     "mattpocock-skills-dsh",
     "open-design-skills-dsh",
+    "rea-dsh-plugin",
     "archify-skill-dsh",
+    "ppt-master-skill-dsh",
     "dsh-better-sidebar",
     "dsh-mnemon",
     "dsh-whale-widget",

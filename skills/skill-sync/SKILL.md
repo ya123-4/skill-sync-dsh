@@ -5,17 +5,25 @@ description: Check whether skill bundles built from open-source skill repositori
 
 # skill-sync
 
-Ten packages are managed from one registry. Five are rebuilt bundles in
-`dsh-plugin-build/`: each is assembled from an open-source skill repository by a
-recipe, and `skill-sync` knows how it is assembled and what its installed bytes came
-from. The other five follow whatever publishes them: four npm plugins (reported only —
-`update` prints the `pnpm add` command and writes nothing) and archify, whose release
-asset `snapshot` mode replaces wholesale.
+Twelve packages are managed from one registry. Six are rebuilt bundles: five are
+assembled from an open-source skill repository, and `rea-dsh-plugin` is assembled from
+the published `rea-agents` npm package — its skills ship inside that package, and the
+release it vendored is pinned in its `optionalDependencies`, because the plugin's own
+0.1.x line is unrelated to rea-agents 6.x. `skill-sync` knows how each is assembled and
+what its installed bytes came from. The other six follow whatever publishes them: four
+npm plugins (reported only — `update` prints the `pnpm add` command and writes nothing)
+and two `snapshot` bundles whose upstream ships a packaged release asset (archify;
+ppt-master, whose asset name carries the version). `snapshot` replaces the skill
+directory wholesale and re-packs; `{tag}` in the declared asset name and `assetSubtree`
+for an asset that wraps the payload cover the two shapes seen so far.
 
 It refuses to guess about anything else: coverage comes from the registry, so a new
 package is managed by adding one entry. Every entry declares `kind` (where the
 upstream is queried: `github-tags`, `github-releases`, `npm`) and `mode` (how it is
-updated: `rebuild`, `snapshot`, `manual`).
+updated: `rebuild`, `snapshot`, `manual`). A `rebuild` entry pairs with `github-tags`
+(a repository, rebuilt from a tag) or `npm` (a published package, rebuilt from its
+registry tarball); the npm form needs only `skillsRoot`, and its comparison baseline is
+the bundle's `optionalDependencies` pin rather than the bundle's own version.
 
 ## When to use it
 

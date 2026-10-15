@@ -44,11 +44,12 @@ from core.upstream import (
     STATUS_UPDATE_AVAILABLE,
     GithubClient,
     SnapshotError,
+    fetch_npm_snapshot,
     fetch_snapshot,
     local_version,
 )
 from core.verify import blocking, verify_candidate
-from core.versions import normalize_tag
+from core.versions import bump_patch, normalize_tag
 from recipes.base import AnchorNotFound, RecipeContext, StructureChanged
 
 sys.stdout.reconfigure(encoding="utf-8", errors="replace")
@@ -146,15 +147,19 @@ def load_recipe(name: str):
 def default_upstream_provider(workspace: Path) -> Callable[[object, str], Path]:
     """Where an entry's upstream tree comes from.
 
-    Four bundles are codeload tarballs at a tag or commit. open-design is served
-    per file from jsDelivr (its repository is 3.5 GB), so it reads the material
-    cache that ``tools/fetch_open_design_sources.py`` fills; a missing cache is an
-    upstream failure whose message carries the exact command.
+    Four bundles are codeload tarballs at a tag or commit. rea-dsh-plugin vendors
+    skills from a *published npm package* on its own version line, so its upstream
+    is that package's registry tarball. open-design is served per file from
+    jsDelivr (its repository is 3.5 GB), so it reads the material cache that
+    ``tools/fetch_open_design_sources.py`` fills; a missing cache is an upstream
+    failure whose message carries the exact command.
     """
     snapshots = default_snapshot_dir(workspace)
     sources = workspace / "tmpwork" / "od-source"
 
     def _provider(entry, ref: str) -> Path:
+        if entry.kind == "npm":
+            return fetch_npm_snapshot(entry, ref, snapshots)
         if entry.recipe == "open_design":
             # The ref decides which material is read: a rebuild passes the pinned
             # commit, an update passes the commit the new tag points at. Missing
@@ -198,6 +203,23 @@ def _diff_skills(previous: Path, candidate: Path):
 # ---- check --------------------------------------------------------------
 
 
+def _plugin_version(entry) -> str:
+    """The version the bundle declares for itself -- its own line, not upstream.
+
+    Only bumpable when the two lines are separate (rea-dsh-plugin 0.1.x vendoring
+    rea-agents 6.x); elsewhere the bundle's version *is* the upstream version.
+    """
+    manifest = entry.plugin_dir / "package.json"
+    try:
+        payload = json.loads(manifest.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        raise RuntimeError(f"{entry.package}: cannot read {manifest}: {exc}") from exc
+    version = str(payload.get("version") or "")
+    if not version:
+        raise RuntimeError(f"{entry.package}: {manifest} has no version")
+    return version
+
+
 def update_command(entry, version: str) -> str | None:
     """How a human takes a follow-型 entry to ``version``, when that is knowable."""
     if entry.kind == "npm":
@@ -216,7 +238,13 @@ def _check_row(entry, client, profile_dir: Path | None, npm) -> CheckRow:
     """One row: a rebuilt bundle is compared against its skill upstream, a
     third-party plugin against whatever publishes it in the profile."""
     if entry.is_rebuild:
-        info = client.latest(entry)
+        # A bundle that vendors an npm package is compared against the upstream
+        # release it pinned, not against its own version line.
+        info = (
+            npm.latest(entry.source, local_version(entry))
+            if entry.kind == "npm"
+            else client.latest(entry)
+        )
         return CheckRow(
             package=entry.package,
             local=local_version(entry),
@@ -355,6 +383,7 @@ def run_update(
                     no_pack=no_pack,
                     pack_runner=pack_runner,
                     profile_skills=profile_skills,
+                    npm=npm,
                 )
         except Exception as exc:  # noqa: BLE001 - one broken bundle must not lose the batch
             # `GithubClient.latest` already turns upstream failures into `unknown`
@@ -463,7 +492,8 @@ def _update_snapshot(
 
     try:
         archive = fetch_release_asset(entry.repo, info.tag, entry.asset, cache_dir)
-        wrote = extract_subtree(archive, target_name, staging / "skills" / target_name)
+        subtree = entry.asset_subtree or target_name
+        wrote = extract_subtree(archive, subtree, staging / "skills" / target_name)
     except ReleaseError as exc:
         return UpdateRow(entry.package, "failed", str(exc), code=EXIT_UPSTREAM, staging=staging)
     if not wrote:
@@ -619,16 +649,33 @@ def _update_one(
     no_pack: bool,
     pack_runner,
     profile_skills: dict | None = None,
+    npm=None,
 ) -> UpdateRow:
     before_version = local_version(entry)
-    info = client.latest(entry)
+    pinned_upstream = entry.kind == "npm"
+    info = (
+        npm.latest(entry.source, before_version)
+        if pinned_upstream and npm is not None
+        else client.latest(entry)
+    )
 
     if info.status == STATUS_UPDATE_AVAILABLE and info.tag:
         ref = info.tag
-        target_version = normalize_tag(info.tag, entry.tag_prefix) or before_version
+        # A bundle on its own version line cannot adopt the upstream number: the new
+        # upstream release goes into the optionalDependencies pin, and the plugin's
+        # own patch number moves so the rebuild is a new release of the plugin.
+        target_version = (
+            bump_patch(_plugin_version(entry))
+            if pinned_upstream
+            else (normalize_tag(info.tag, entry.tag_prefix) or before_version)
+        )
     elif rebuild:
+        # A rebuild without a new upstream release re-runs the recipe at the pinned
+        # ref. For a bundle on its own version line those are two different values
+        # (upstream 6.x, bundle 0.1.x), so the bundle version must not be replaced by
+        # the upstream one -- the pin already lives in optionalDependencies.
         ref = entry.baseline_commit or f"{entry.tag_prefix}{before_version}"
-        target_version = before_version
+        target_version = _plugin_version(entry) if pinned_upstream else before_version
     elif info.status == STATUS_UP_TO_DATE:
         return UpdateRow(entry.package, "skipped", f"already up to date ({before_version})")
     else:
@@ -641,10 +688,15 @@ def _update_one(
             code=EXIT_UPSTREAM,
         )
 
-    # The state file records both halves: the tag that version checks compare the
-    # bundle against, and the exact revision its bytes came from (a commit, for a
-    # bundle pinned to one). A commit must never be stored as the tag.
-    if normalize_tag(ref, entry.tag_prefix) is not None:
+    # The state file records both halves: the upstream release version checks
+    # compare the bundle against, and the exact revision its bytes came from (a
+    # commit, for a bundle pinned to one). A commit must never be stored as the tag.
+    if pinned_upstream:
+        # The pinned npm release *is* the upstream ref; the bundle's own version is
+        # a different line and must never be written where the upstream one belongs.
+        synced_tag = ref
+        synced_commit = None
+    elif normalize_tag(ref, entry.tag_prefix) is not None:
         synced_tag = ref
         synced_commit = info.commit
     else:
@@ -740,7 +792,12 @@ def _update_one(
         )
 
     try:
-        backup = apply_candidate(entry.plugin_dir, staging / "skills", target_version)
+        backup = apply_candidate(
+            entry.plugin_dir,
+            staging / "skills",
+            target_version,
+            dependency_bump=(entry.source, ref) if pinned_upstream else None,
+        )
     except ApplyFailed as exc:
         return UpdateRow(
             entry.package,
