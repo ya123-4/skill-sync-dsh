@@ -46,10 +46,11 @@ from core.upstream import (
     SnapshotError,
     fetch_npm_snapshot,
     fetch_snapshot,
+    local_revision,
     local_version,
 )
 from core.verify import blocking, verify_candidate
-from core.versions import bump_patch, normalize_tag
+from core.versions import bump_patch, normalize_tag, short_revision
 from recipes.base import AnchorNotFound, RecipeContext, StructureChanged
 
 sys.stdout.reconfigure(encoding="utf-8", errors="replace")
@@ -238,6 +239,19 @@ def _check_row(entry, client, profile_dir: Path | None, npm) -> CheckRow:
     """One row: a rebuilt bundle is compared against its skill upstream, a
     third-party plugin against whatever publishes it in the profile."""
     if entry.is_rebuild:
+        if entry.kind == "github-commits":
+            # Nothing to compare by version: show both revisions short enough to
+            # read at a glance. A missing baseline prints as itself, never as a sha.
+            info = client.latest(entry)
+            return CheckRow(
+                package=entry.package,
+                local=short_revision(local_revision(entry) or "no state"),
+                remote=short_revision(info.commit) if info.commit else None,
+                status=info.status,
+                reason=info.reason,
+                manual_skills=entry.manual_skills,
+                upstream_failed=info.status == STATUS_UNKNOWN,
+            )
         # A bundle that vendors an npm package is compared against the upstream
         # release it pinned, not against its own version line.
         info = (
@@ -659,7 +673,36 @@ def _update_one(
         else client.latest(entry)
     )
 
-    if info.status == STATUS_UPDATE_AVAILABLE and info.tag:
+    if entry.kind == "github-commits":
+        # No tag to adopt: the upstream revision *is* the ref, and this bundle's own
+        # patch number moves so the rebuild is a new release of the plugin. The
+        # landing below already records `syncedCommit = ref` for any non-tag ref, so
+        # this branch decides only where the ref comes from.
+        if info.status == STATUS_UPDATE_AVAILABLE and info.commit:
+            ref = info.commit
+            target_version = bump_patch(before_version)
+        elif rebuild:
+            ref = entry.baseline_commit or local_revision(entry)
+            if not ref:
+                return UpdateRow(
+                    entry.package,
+                    "unknown",
+                    "no recorded revision to rebuild from",
+                    code=EXIT_UPSTREAM,
+                )
+            target_version = before_version
+        elif info.status == STATUS_UP_TO_DATE:
+            return UpdateRow(entry.package, "skipped", f"already up to date ({before_version})")
+        else:
+            # "unknown" is not "current": no answer from upstream must never read
+            # as a bundle that needs nothing.
+            return UpdateRow(
+                entry.package,
+                "unknown",
+                f"cannot compare with upstream: {info.reason or 'no answer from upstream'}",
+                code=EXIT_UPSTREAM,
+            )
+    elif info.status == STATUS_UPDATE_AVAILABLE and info.tag:
         ref = info.tag
         # A bundle on its own version line cannot adopt the upstream number: the new
         # upstream release goes into the optionalDependencies pin, and the plugin's

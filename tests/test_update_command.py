@@ -1,4 +1,5 @@
 """update orchestration: check -> fetch -> recipe -> verify -> apply -> pack."""
+import dataclasses
 import hashlib
 import io
 import json
@@ -9,7 +10,12 @@ import pytest
 
 from core import state
 from core.registry import Entry
-from core.upstream import STATUS_UP_TO_DATE, STATUS_UPDATE_AVAILABLE, LatestInfo
+from core.upstream import (
+    STATUS_UNKNOWN,
+    STATUS_UP_TO_DATE,
+    STATUS_UPDATE_AVAILABLE,
+    LatestInfo,
+)
 from skill_sync import run_update
 
 
@@ -301,3 +307,122 @@ def test_update_rebuild_pinned_to_a_commit_keeps_state_comparable(scratch, dist)
     payload = state.read(entry.plugin_dir)
     assert payload["syncedTag"] == "v1.0.0"
     assert payload["syncedCommit"] == "a" * 40
+
+
+# ---- commit-tracked bundles (kind: github-commits) ----------------------
+
+
+class CommitClient:
+    """A commit-driven entry has no tag: the revision is the whole signal."""
+
+    def __init__(self, status=STATUS_UPDATE_AVAILABLE, commit="b" * 40):
+        self.info = LatestInfo(status=status, tag=None, commit=commit, reason=None, source="test")
+
+    def latest(self, entry):
+        return self.info
+
+
+def commit_entry(scratch, version="0.1.0", name="humanizer-zh"):
+    """A managed bundle whose *installed* skill already carries the target name.
+
+    Two things have to line up before the commit path is even reached:
+    ``verify_candidate`` compares the staged tree against the installed directory
+    names (or it reports a structure change, exit 4) and each ``SKILL.md`` must
+    declare the name its directory has (or it reports name-mismatch, exit 5).
+    Fixtures are written as explicit bytes: ``write_text`` would emit CRLF on
+    Windows and the recipe's frontmatter check reads for a bare ``---\\n``.
+    """
+    entry = make_entry(
+        scratch,
+        version=version,
+        package="humanizer-zh-skill-dsh",
+        recipe="root_skill",
+        expected=(name,),
+    )
+    skill = entry.plugin_dir / "skills" / "alpha"
+    skill.rename(entry.plugin_dir / "skills" / name)
+    skill = entry.plugin_dir / "skills" / name
+    (skill / "SKILL.md").write_bytes(
+        f"---\nname: {name}\ndescription: old\n---\n\nold body\n".encode("utf-8")
+    )
+    return dataclasses.replace(entry, kind="github-commits", tag_prefix="", skills_root=".")
+
+
+def root_upstream(scratch, name="humanizer-zh", body="new body"):
+    root = scratch / "upstream"
+    root.mkdir(exist_ok=True)
+    (root / "SKILL.md").write_bytes(
+        f"---\nname: {name}\ndescription: new\n---\n\n{body}\n".encode("utf-8")
+    )
+    return root
+
+
+def test_short_revision_truncates_a_sha():
+    from core.versions import short_revision
+
+    assert short_revision("f4518a8eab97b8bfebc66a89d34320a89bef6930") == "f4518a8"
+    assert short_revision("no state") == "no state"
+
+
+def test_update_commit_kind_lands_the_sha_it_queried(scratch, dist):
+    entry = commit_entry(scratch)
+    upstream = root_upstream(scratch)
+
+    code = run_update(
+        [entry],
+        CommitClient(commit="b" * 40),
+        scratch,
+        upstream_provider=provider(upstream),
+        dist_dir=dist,
+        pack_runner=fake_pack_runner(),
+        stream=io.StringIO(),
+    )
+
+    assert code == 0
+    manifest = json.loads((entry.plugin_dir / "package.json").read_text(encoding="utf-8"))
+    assert manifest["version"] == "0.1.1"
+    payload = state.read(entry.plugin_dir)
+    assert payload["syncedTag"] == "0.1.1"
+    assert payload["syncedCommit"] == "b" * 40
+    assert (dist / "humanizer-zh-skill-dsh-0.1.1.tgz").is_file()
+    text = (entry.plugin_dir / "skills" / "humanizer-zh" / "SKILL.md").read_text(encoding="utf-8")
+    assert "new body" in text
+
+
+def test_update_commit_kind_without_a_baseline_is_unknown(scratch, dist):
+    entry = commit_entry(scratch)
+    before = snapshot_tree(entry.plugin_dir)
+
+    code = run_update(
+        [entry],
+        CommitClient(status=STATUS_UNKNOWN),
+        scratch,
+        upstream_provider=provider(root_upstream(scratch)),
+        dist_dir=dist,
+        pack_runner=fake_pack_runner(),
+        stream=io.StringIO(),
+    )
+
+    assert code == 3  # EXIT_UPSTREAM: unknown is never "current"
+    assert snapshot_tree(entry.plugin_dir) == before
+
+
+def test_update_commit_kind_rebuild_uses_the_pinned_baseline(scratch, dist):
+    entry = dataclasses.replace(commit_entry(scratch), baseline_commit="a" * 40)
+
+    code = run_update(
+        [entry],
+        CommitClient(status=STATUS_UP_TO_DATE),
+        scratch,
+        upstream_provider=provider(root_upstream(scratch, body="rebuilt body")),
+        dist_dir=dist,
+        rebuild=True,
+        pack_runner=fake_pack_runner(),
+        stream=io.StringIO(),
+    )
+
+    assert code == 0
+    payload = state.read(entry.plugin_dir)
+    assert payload["syncedCommit"] == "a" * 40
+    text = (entry.plugin_dir / "skills" / "humanizer-zh" / "SKILL.md").read_text(encoding="utf-8")
+    assert "rebuilt body" in text

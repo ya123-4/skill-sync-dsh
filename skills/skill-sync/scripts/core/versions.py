@@ -75,3 +75,17 @@ def bump_patch(version: str) -> str:
     core = list(parts) + [0] * max(0, 3 - len(parts))
     core[2] += 1
     return ".".join(str(part) for part in core[:3])
+
+
+def short_revision(raw: str, width: int = 7) -> str:
+    """A readable prefix of a commit sha; anything else is returned unchanged.
+
+    ``check`` prints the local and remote revisions side by side, and forty hex
+    characters crowd out the status column. A value that is not a sha -- "no
+    state", a tag, a placeholder -- is passed through so it still reads as itself.
+    """
+    candidate = raw.strip()
+    hexdigits = "0123456789abcdefABCDEF"
+    if len(candidate) >= 40 and all(char in hexdigits for char in candidate[:40]):
+        return candidate[:width]
+    return raw
