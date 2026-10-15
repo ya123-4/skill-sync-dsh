@@ -22,6 +22,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Callable
 
+from core import state
 from core.registry import Entry
 from core.versions import is_newer, normalize_tag, normalize_version
 
@@ -97,6 +98,26 @@ def local_version(entry: Entry) -> str:
     return version
 
 
+def local_revision(entry: Entry) -> str | None:
+    """The upstream revision the installed bundle came from, or ``None``.
+
+    A commit-tracked bundle has no version to compare against, so its baseline is
+    the revision recorded in its own state file. A missing, unreadable or empty
+    record is a *missing baseline*: the caller reports ``unknown``, never
+    "current" -- the same rule that keeps a rate limit from reading as up to date.
+    """
+    if entry.plugin_dir is None:
+        return None
+    try:
+        payload = state.read(entry.plugin_dir)
+    except Exception:  # noqa: BLE001 - an unusable record is a missing baseline
+        return None
+    if payload is None:
+        return None
+    commit = payload.get("syncedCommit")
+    return commit if isinstance(commit, str) and commit else None
+
+
 class GithubClient:
     """Answers "is there a newer upstream release?" for one entry at a time."""
 
@@ -121,6 +142,9 @@ class GithubClient:
     # ---- public API -----------------------------------------------------
 
     def latest(self, entry: Entry) -> LatestInfo:
+        if entry.kind == "github-commits":
+            return self._latest_commit(entry)
+
         cached = self._read_cache(entry)
 
         if self.offline:
@@ -146,6 +170,65 @@ class GithubClient:
             )
         self._write_cache(entry, tag, commit)
         return self._evaluate(entry, tag, commit, source)
+
+    # ---- commit-tracked upstreams ---------------------------------------
+
+    def _latest_commit(self, entry: Entry) -> LatestInfo:
+        """The newest commit on ``entry.branch``, against the bundle's record.
+
+        An upstream with no tags has no version to compare, so the revision *is*
+        the release. Everything else -- cache, ``--offline``, rate limits, 404s --
+        behaves exactly as it does for the tag path.
+        """
+        cached = self._read_cache(entry)
+
+        if self.offline:
+            commit = (cached or {}).get("commit")
+            if isinstance(commit, str) and commit:
+                return self._evaluate_commit(entry, commit, "cache")
+            return LatestInfo(STATUS_UNKNOWN, None, None, "offline and no cached result", "cache")
+
+        if cached is not None and not self.refresh and self._is_fresh(cached):
+            commit = cached.get("commit")
+            if isinstance(commit, str) and commit:
+                return self._evaluate_commit(entry, commit, "cache")
+
+        try:
+            commit = self._query_head_commit(entry)
+        except UpstreamError as exc:
+            return LatestInfo(STATUS_UNKNOWN, None, None, str(exc), "network")
+
+        if commit is None:
+            return LatestInfo(
+                STATUS_UNKNOWN,
+                None,
+                None,
+                f"no commit on {entry.repo}@{entry.branch}",
+                "commits",
+            )
+        self._write_cache(entry, "", commit)
+        return self._evaluate_commit(entry, commit, "commits")
+
+    def _query_head_commit(self, entry: Entry) -> str | None:
+        """The head commit of the tracked branch -- not whatever a tag points at."""
+        headers = self._headers()
+        status, body = self._call(
+            f"{API_ROOT}/repos/{entry.repo}/commits/{entry.branch}", headers
+        )
+        if status in (403, 429):
+            raise UpstreamError(RATE_LIMIT_REASON)
+        if status == 404:
+            raise UpstreamError(f"{entry.repo}: repository not found or renamed (HTTP 404)")
+        if status != 200:
+            raise UpstreamError(f"{entry.repo}: GitHub API returned HTTP {status}")
+
+        try:
+            payload = json.loads(body or b"{}")
+        except (json.JSONDecodeError, UnicodeDecodeError) as exc:
+            raise UpstreamError(f"{entry.repo}: malformed commit payload: {exc}") from exc
+
+        sha = payload.get("sha")
+        return sha if isinstance(sha, str) and sha else None
 
     # ---- query ----------------------------------------------------------
 
@@ -249,6 +332,20 @@ class GithubClient:
 
         status = STATUS_UPDATE_AVAILABLE if is_newer(local, remote) else STATUS_UP_TO_DATE
         return LatestInfo(status, tag, commit, None, source)
+
+    def _evaluate_commit(self, entry: Entry, commit: str, source: str) -> LatestInfo:
+        """Compare a revision against the bundle's recorded one (never a version)."""
+        local = local_revision(entry)
+        if not local:
+            return LatestInfo(
+                STATUS_UNKNOWN,
+                None,
+                commit,
+                "no local revision recorded (the bundle has no state file)",
+                source,
+            )
+        status = STATUS_UP_TO_DATE if local == commit else STATUS_UPDATE_AVAILABLE
+        return LatestInfo(status, None, commit, None, source)
 
     # ---- cache ----------------------------------------------------------
 

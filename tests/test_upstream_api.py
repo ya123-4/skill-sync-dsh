@@ -1,5 +1,6 @@
-"""Upstream API queries: newest matching tag, caching, failure classification."""
+"""Upstream API queries: newest matching tag or head commit, caching, failure classification."""
 import json
+from dataclasses import replace
 from pathlib import Path
 
 import pytest
@@ -190,3 +191,135 @@ def test_commit_pinned_entry_reports_head_commit(scratch, cache_dir):
     info = GithubClient(http=http, cache_dir=cache_dir).latest(entry)
     assert info.tag == "open-design-v0.24.1"
     assert info.commit == "deadbeef"
+
+
+# ---- commit-tracked upstreams (kind: github-commits) --------------------
+#
+# An upstream with no tags has no version to compare: the newest commit on its
+# branch is the release, and the baseline is the revision recorded in the
+# bundle's own state file. A missing baseline is unknown, never "current".
+
+
+def commit_entry(scratch, synced_commit=None, package="humanizer-zh-skill-dsh"):
+    entry = replace(
+        make_entry(
+            scratch,
+            version="0.1.0",
+            tag_prefix="",
+            package=package,
+            repo="op7418/Humanizer-zh",
+        ),
+        kind="github-commits",
+        branch="main",
+    )
+    if synced_commit is not None:
+        (entry.plugin_dir / ".skill-sync-state.json").write_text(
+            json.dumps(
+                {
+                    "schema": 1,
+                    "package": package,
+                    "upstream": entry.repo,
+                    "syncedTag": "0.1.0",
+                    "syncedCommit": synced_commit,
+                    "syncedAt": "2026-10-15T00:00:00+00:00",
+                    "overlayVersion": 1,
+                    "skills": {},
+                }
+            ),
+            encoding="utf-8",
+        )
+    return entry
+
+
+def commit_http(sha="b" * 40, status=200):
+    def _http(url, headers):
+        return status, json.dumps({"sha": sha}).encode("utf-8")
+
+    return _http
+
+
+def test_commit_kind_same_revision_is_up_to_date(scratch, cache_dir):
+    entry = commit_entry(scratch, synced_commit="a" * 40)
+    info = GithubClient(http=commit_http(sha="a" * 40), cache_dir=cache_dir).latest(entry)
+
+    assert (info.status, info.tag, info.commit) == ("up_to_date", None, "a" * 40)
+
+
+def test_commit_kind_new_revision_is_update_available(scratch, cache_dir):
+    entry = commit_entry(scratch, synced_commit="a" * 40)
+    info = GithubClient(http=commit_http(sha="b" * 40), cache_dir=cache_dir).latest(entry)
+
+    assert (info.status, info.commit) == ("update_available", "b" * 40)
+
+
+def test_commit_kind_without_a_recorded_revision_is_unknown(scratch, cache_dir):
+    entry = commit_entry(scratch, synced_commit=None)
+    info = GithubClient(http=commit_http(), cache_dir=cache_dir).latest(entry)
+
+    assert info.status == "unknown"
+    assert "no local revision" in (info.reason or "")
+
+
+def test_commit_kind_with_a_corrupt_record_is_unknown(scratch, cache_dir):
+    entry = commit_entry(scratch, synced_commit="a" * 40)
+    (entry.plugin_dir / ".skill-sync-state.json").write_text("{not json", encoding="utf-8")
+
+    info = GithubClient(http=commit_http(), cache_dir=cache_dir).latest(entry)
+
+    assert info.status == "unknown"
+    assert "no local revision" in (info.reason or "")
+
+
+def test_commit_kind_rate_limit_is_unknown(scratch, cache_dir):
+    entry = commit_entry(scratch, synced_commit="a" * 40)
+    info = GithubClient(http=commit_http(status=403), cache_dir=cache_dir).latest(entry)
+
+    assert info.status == "unknown"
+    assert "rate limit" in (info.reason or "").lower()
+
+
+def test_commit_kind_missing_repository_is_unknown(scratch, cache_dir):
+    entry = commit_entry(scratch, synced_commit="a" * 40)
+    info = GithubClient(http=commit_http(status=404), cache_dir=cache_dir).latest(entry)
+
+    assert info.status == "unknown"
+    reason = (info.reason or "").lower()
+    assert "not found" in reason or "renamed" in reason
+
+
+def test_commit_kind_uses_the_branch_in_the_entry(scratch, cache_dir):
+    entry = replace(commit_entry(scratch, synced_commit="a" * 40), branch="trunk")
+    seen = []
+
+    def _http(url, headers):
+        seen.append(url)
+        return 200, json.dumps({"sha": "a" * 40}).encode("utf-8")
+
+    GithubClient(http=_http, cache_dir=cache_dir).latest(entry)
+
+    assert seen and seen[0].endswith("/commits/trunk")
+
+
+def test_commit_kind_offline_without_cache_is_unknown(scratch, cache_dir):
+    entry = commit_entry(scratch, synced_commit="a" * 40)
+
+    def _http(url, headers):
+        raise AssertionError("offline mode must not touch the network")
+
+    info = GithubClient(http=_http, cache_dir=cache_dir, offline=True).latest(entry)
+
+    assert (info.status, info.source) == ("unknown", "cache")
+
+
+def test_commit_kind_caches_the_head_commit(scratch, cache_dir):
+    entry = commit_entry(scratch, synced_commit="a" * 40)
+    calls = []
+
+    def _http(url, headers):
+        calls.append(url)
+        return 200, json.dumps({"sha": "b" * 40}).encode("utf-8")
+
+    GithubClient(http=_http, cache_dir=cache_dir).latest(entry)
+    GithubClient(http=_http, cache_dir=cache_dir).latest(entry)
+
+    assert len(calls) == 1
