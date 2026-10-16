@@ -12,7 +12,6 @@ Usage:
 from __future__ import annotations
 
 import argparse
-import shutil
 import sys
 from pathlib import Path
 
@@ -25,6 +24,7 @@ from core.exitcodes import EXIT_OK, EXIT_SELFCHECK, EXIT_UPSTREAM  # noqa: E402
 from core.registry import RegistryError, load, resolve_workspace, select  # noqa: E402
 from core.upstream import (  # noqa: E402
     SnapshotError,
+    _remove_tree,
     fetch_npm_snapshot,
     fetch_snapshot,
     local_revision,
@@ -35,6 +35,23 @@ from core.upstream import (  # noqa: E402
 
 sys.stdout.reconfigure(encoding="utf-8", errors="replace")
 sys.stderr.reconfigure(encoding="utf-8", errors="replace")
+
+
+def refresh_snapshot_cache(cache, slug: str) -> Path:
+    """Drop one cached snapshot entry before re-downloading it, and name it back.
+
+    ``--refresh`` used to call a plain ``shutil.rmtree``. That call cannot reach a
+    descendant past MAX_PATH -- this host runs with ``LongPathsEnabled=0`` and the
+    alibabacloud monorepo reaches 292 characters under the real cache root -- so it
+    aborted at the first such descendant and left the ``.complete`` marker behind.
+    ``_fetch_tarball`` then saw the marker, treated the entry as a cache hit and
+    returned the old checkout: ``--refresh`` reported success while serving stale
+    bytes. ``_remove_tree`` walks the tree through an extended-length path, which is
+    the same helper the fetch path uses to clear a failed attempt.
+    """
+    root = Path(cache) / "snapshots" / slug
+    _remove_tree(root)
+    return root
 
 
 def snapshot_ref(entry) -> str:
@@ -83,7 +100,7 @@ def main(argv: list[str] | None = None) -> int:
             else snapshot_slug(entry.repo, ref)
         )
         if args.refresh:
-            shutil.rmtree(cache / "snapshots" / slug, ignore_errors=True)
+            refresh_snapshot_cache(cache, slug)
         try:
             checkout = (
                 fetch_npm_snapshot(entry, ref, cache)

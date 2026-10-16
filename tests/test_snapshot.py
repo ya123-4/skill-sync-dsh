@@ -4,9 +4,12 @@ Tarballs are built in-memory by the tests, so no binary fixtures are committed
 and every failure mode (corrupt gzip, no wrapper directory, HTTP error) is
 reproducible offline.
 """
+import dataclasses
+import importlib.util
 import io
 import json
 import os
+import shutil
 import tarfile
 from pathlib import Path
 
@@ -14,6 +17,40 @@ import pytest
 
 from core.registry import Entry
 from core.upstream import SnapshotError, fetch_snapshot, snapshot_url
+
+PKG_ROOT = Path(__file__).resolve().parent.parent
+
+
+def longest_path_exists(path: Path) -> bool:
+    """Whether ``path`` exists -- asked in a way that can answer past MAX_PATH.
+
+    The trees under test are deliberately deeper than Windows can address without
+    an extended-length prefix, so a probe written with the plain path would report
+    "absent" for a directory that is merely unreachable, and every assertion below
+    would pass vacuously. On POSIX there is no such limit and the plain probe is the
+    answer.
+    """
+    if os.name != "nt":  # pragma: no cover - POSIX has no such limit
+        return path.exists()
+
+    from core.upstream import _long_path  # noqa: PLC0415 - needs conftest's sys.path
+
+    try:
+        return Path(_long_path(path)).exists()
+    except OSError:
+        # The path is past MAX_PATH and not prefixed: it exists but cannot be
+        # addressed, which is exactly the state this probe reports as present.
+        return True
+
+
+def load_fetch_snapshots_module():
+    """The shipped script as a module, exactly as callers import it."""
+    spec = importlib.util.spec_from_file_location(
+        "fetch_snapshots", PKG_ROOT / "tools" / "fetch_snapshots.py"
+    )
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
 
 
 def make_entry(scratch, package="demo-skill-dsh", repo="demo/skills") -> Entry:
@@ -187,6 +224,101 @@ def test_removing_a_cache_root_takes_its_long_descendants_with_it(scratch):
 
     assert not root.exists()
     assert not Path(_long_path(deep)).exists()
+
+
+def test_refresh_discards_a_deep_cached_snapshot(scratch):
+    """``--refresh`` over a deep cache entry must land a fresh checkout.
+
+    The entry is deep *because* extraction now works: the alibabacloud monorepo
+    reaches 292 characters under the real cache root, while ``LongPathsEnabled`` is
+    0 here. ``tools/fetch_snapshots.py --refresh`` deletes the cached entry before
+    re-fetching, and a plain ``rmtree`` aborts at the first descendant past
+    MAX_PATH: the ``.complete`` marker survives, the cache-hit branch of
+    ``_fetch_tarball`` sees it, and ``--refresh`` reports success while serving the
+    old bytes. The deep file below is the part only an extended-length walk can
+    remove, so this test fails against the plain-``rmtree`` refresh and passes
+    against the shipped one.
+    """
+    from core.upstream import _long_path  # noqa: PLC0415 - needs conftest's sys.path
+
+    module = load_fetch_snapshots_module()
+    entry = make_entry(scratch)
+    cache = scratch / "cache"
+    slug = "demo__skills__v1.0.0"
+
+    root = cache / "snapshots" / slug
+    (root / "mini-1.0.0" / "skills" / "foo").mkdir(parents=True)
+    (root / "mini-1.0.0" / "skills" / "foo" / "SKILL.md").write_text("stale", encoding="utf-8")
+    (root / ".complete").write_text("demo/skills@v1.0.0\n", encoding="utf-8")
+
+    deep = root / ("d" * 20) / ("d" * 20) / ("d" * 20) / ("d" * 20) / ("d" * 20) / ("d" * 20)
+    Path(_long_path(deep)).mkdir(parents=True)
+    (Path(_long_path(deep)) / "deep.md").write_text("stale", encoding="utf-8")
+
+    # The entry under test is short while its descendants are not, and the deep path
+    # only proves anything while it is genuinely past MAX_PATH.
+    assert len(str(root)) < 260, len(str(root))
+    assert len(str(deep)) > 260, len(str(deep))
+
+    removed = module.refresh_snapshot_cache(cache, slug)
+    assert Path(removed) == root, removed
+
+    fetched: list = []
+    root = fetch_snapshot(entry, "v1.0.0", cache, serving(build_tarball(), calls=fetched))
+
+    assert fetched, "a discarded cache entry must be re-downloaded, not served stale"
+    assert not longest_path_exists(deep), "a deep descendant survived the refresh"
+    assert (root / "skills/foo/SKILL.md").read_text(encoding="utf-8").startswith("---")
+
+
+def test_refresh_flag_drops_the_deep_cache_before_it_re_fetches(scratch, monkeypatch):
+    """The CLI's own ``--refresh`` path, end to end over a stubbed transport.
+
+    The unit test above proves ``refresh_snapshot_cache`` removes deep trees; this
+    one proves ``main()`` actually goes through it. The registry entry is real, so
+    the slug ``main()`` builds is the slug this test caches; the fetch is stubbed
+    because the real one would need the network. Under the old plain ``rmtree`` the
+    deletion aborts below, the ``.complete`` marker survives, and the recorded
+    search path still holds the stale checkout when the fetch is called.
+    """
+    from core.upstream import _long_path  # noqa: PLC0415 - needs conftest's sys.path
+
+    module = load_fetch_snapshots_module()
+
+    workspace = scratch / "fake-workspace"
+    (workspace / "dsh-plugin-build").mkdir(parents=True)
+    plugin = workspace / "dsh-plugin-build" / "demo-skill-dsh"
+    (plugin / "skills").mkdir(parents=True)
+    (plugin / "package.json").write_text(
+        json.dumps({"name": "demo-skill-dsh", "version": "1.0.0"}), encoding="utf-8"
+    )
+
+    monkeypatch.setattr(
+        module,
+        "load",
+        lambda _workspace: [
+            dataclasses.replace(make_entry(scratch), plugin_dir=plugin, kind="github-tags")
+        ],
+    )
+
+    slug = "demo__skills__v1.0.0"
+    root = workspace / "tmpwork" / "skill-sync-upstream" / "snapshots" / slug
+    (root / "mini-1.0.0").mkdir(parents=True)
+    (root / "mini-1.0.0" / "SKILL.md").write_text("stale", encoding="utf-8")
+    (root / ".complete").write_text("demo/skills@v1.0.0\n", encoding="utf-8")
+    deep = root / ("d" * 20) / ("d" * 20) / ("d" * 20) / ("d" * 20) / ("d" * 20) / ("d" * 20)
+    Path(_long_path(deep)).mkdir(parents=True)
+    assert len(str(deep)) > 260, len(str(deep))
+
+    seen: list = []
+    monkeypatch.setattr(module, "fetch_snapshot", lambda entry, ref, cache: seen.append(ref))
+
+    exit_code = module.main(["--workspace", str(workspace), "--refresh"])
+
+    assert exit_code == 0, exit_code
+    assert seen == ["v1.0.0"], "the cache entry was not discarded before re-fetching"
+    assert not longest_path_exists(deep), "a deep descendant survived --refresh"
+    assert not (root / ".complete").is_file()
 
 
 def test_persistent_transport_failure_gives_up_after_three_attempts(scratch):

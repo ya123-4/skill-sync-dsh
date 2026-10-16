@@ -523,12 +523,21 @@ def _fetch_tarball(
     middlebox truncates larger responses, and one flaky read must not cost a
     whole rebuild.
 
-    On Windows the tree is written through an extended-length destination and read
-    back as one (see ``_long_path``): a monorepo snapshot reaches 292 characters
-    under this cache root while ``LongPathsEnabled`` is 0, so a plain path cannot
-    even be stat'd, let alone extracted. Short paths and other platforms are
-    unaffected in every observable way -- same cache layout, same marker, same
-    single checkout directory.
+    Two separate contracts, and only the first is unchanged:
+
+    * **Extraction** behaves as it always did -- same cache layout, same
+      ``.complete`` marker, same single checkout directory, and on POSIX the same
+      path spelling. The extended-length destination below is a Windows detail
+      that callers never see.
+    * **The returned path is spelled through ``_long_path`` on Windows for every
+      checkout, short ones included** -- not only for trees that are themselves
+      long. Callers append long relative paths to the result (the alibabacloud
+      recipe reaches 292 characters at ``upstream_dir / ... / SKILL.md`` while a
+      plain base path is 225), so a length-gated prefix here would hand back the
+      short form for exactly the checkouts that need the prefix and re-break the
+      read this function exists to make possible. Do not add such a gate: the
+      prefix is unconditional, and POSIX is the platform that keeps the plain
+      string.
     """
     root = cache_dir / "snapshots" / slug
     marker = root / SNAPSHOT_MARKER
