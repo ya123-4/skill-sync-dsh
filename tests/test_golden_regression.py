@@ -444,3 +444,33 @@ def test_rea_reports_a_moved_connect_section(scratch):
     )
     with pytest.raises(AnchorNotFound):
         assemble(context)
+
+
+def test_alibabacloud_workbench_cli_golden(scratch):
+    """One skill out of a 4476-member monorepo, byte-identical but for the DSH note.
+
+    The recipe copies only the declared directory, so this also pins the anti-goal: a
+    version of the recipe that walked `skillsRoot` wholesale would stage ~200 siblings
+    and fail the file-set comparison, not just the checksum.
+    """
+    from recipes.aiops_monorepo import assemble
+
+    entry = registry_entry("alibabacloud-workbench-cli-skill-dsh")
+    staging = scratch / "staging"
+    staging.mkdir()
+
+    result = assemble(context_for(entry, staging))
+
+    assert sorted(result.skills) == sorted(entry.expected_skills)
+    assert result.manual_skills == []
+    assert_tree_identical(staging / "skills", entry.plugin_dir / "skills")
+
+    shipped = (
+        staging / "skills" / "alibabacloud-workbench-cli" / "SKILL.md"
+    ).read_text(encoding="utf-8")
+    assert shipped.rstrip().endswith("impact first.")
+    assert "## DeepSeek Harness notes" in shipped
+    assert not any(
+        path.name == "ram-policies.md" and path.parent.name != "references"
+        for path in (staging / "skills").rglob("*")
+    )
