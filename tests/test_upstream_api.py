@@ -9,7 +9,7 @@ from core.registry import Entry
 from core.upstream import GithubClient, local_version
 
 
-def make_entry(
+def release_entry(
     scratch: Path,
     version: str = "0.38.2",
     tag_prefix: str = "v",
@@ -61,24 +61,24 @@ def cache_dir(scratch: Path) -> Path:
 
 
 def test_local_version_is_read_from_the_plugin_manifest(scratch):
-    assert local_version(make_entry(scratch, version="6.4.2")) == "6.4.2"
+    assert local_version(release_entry(scratch, version="6.4.2")) == "6.4.2"
 
 
 def test_newer_release_reports_update_available(scratch, cache_dir):
-    entry = make_entry(scratch, version="0.38.2")
+    entry = release_entry(scratch, version="0.38.2")
     client = GithubClient(http=github_http(release={"tag_name": "v0.39.0"}), cache_dir=cache_dir)
     info = client.latest(entry)
     assert (info.status, info.tag) == ("update_available", "v0.39.0")
 
 
 def test_equal_release_reports_up_to_date(scratch, cache_dir):
-    entry = make_entry(scratch, version="0.38.2")
+    entry = release_entry(scratch, version="0.38.2")
     client = GithubClient(http=github_http(release={"tag_name": "v0.38.2"}), cache_dir=cache_dir)
     assert client.latest(entry).status == "up_to_date"
 
 
 def test_rate_limit_is_unknown(scratch, cache_dir):
-    entry = make_entry(scratch)
+    entry = release_entry(scratch)
     client = GithubClient(
         http=github_http(release_status=403, tags_status=403), cache_dir=cache_dir
     )
@@ -88,7 +88,7 @@ def test_rate_limit_is_unknown(scratch, cache_dir):
 
 
 def test_missing_repository_is_unknown_and_says_renamed(scratch, cache_dir):
-    entry = make_entry(scratch)
+    entry = release_entry(scratch)
     client = GithubClient(
         http=github_http(release_status=404, tags_status=404), cache_dir=cache_dir
     )
@@ -101,13 +101,13 @@ def test_timeout_is_unknown(scratch, cache_dir):
     def _http(url, headers):
         raise TimeoutError("timed out")
 
-    info = GithubClient(http=_http, cache_dir=cache_dir).latest(make_entry(scratch))
+    info = GithubClient(http=_http, cache_dir=cache_dir).latest(release_entry(scratch))
     assert info.status == "unknown"
     assert "TimeoutError" in info.reason
 
 
 def test_foreign_tags_are_filtered_out(scratch, cache_dir):
-    entry = make_entry(
+    entry = release_entry(
         scratch, version="1.3.1", package="mattpocock-skills-dsh", repo="mattpocock/skills"
     )
     http = github_http(
@@ -119,7 +119,7 @@ def test_foreign_tags_are_filtered_out(scratch, cache_dir):
 
 
 def test_only_non_release_tags_is_unknown(scratch, cache_dir):
-    entry = make_entry(scratch, tag_prefix="open-design-v")
+    entry = release_entry(scratch, tag_prefix="open-design-v")
     http = github_http(release_status=404, tags=[{"name": "pr-3706-verification-assets"}])
     info = GithubClient(http=http, cache_dir=cache_dir).latest(entry)
     assert info.status == "unknown"
@@ -127,7 +127,7 @@ def test_only_non_release_tags_is_unknown(scratch, cache_dir):
 
 
 def test_cache_hit_avoids_a_second_request(scratch, cache_dir):
-    entry = make_entry(scratch, version="0.38.2")
+    entry = release_entry(scratch, version="0.38.2")
     calls = []
 
     def _http(url, headers):
@@ -142,7 +142,7 @@ def test_cache_hit_avoids_a_second_request(scratch, cache_dir):
 
 
 def test_refresh_bypasses_the_cache(scratch, cache_dir):
-    entry = make_entry(scratch, version="0.38.2")
+    entry = release_entry(scratch, version="0.38.2")
     calls = []
 
     def _http(url, headers):
@@ -159,7 +159,7 @@ def test_offline_without_cache_is_unknown(scratch, cache_dir):
     def _http(url, headers):
         raise AssertionError("offline mode must not touch the network")
 
-    info = GithubClient(http=_http, cache_dir=cache_dir, offline=True).latest(make_entry(scratch))
+    info = GithubClient(http=_http, cache_dir=cache_dir, offline=True).latest(release_entry(scratch))
     assert info.status == "unknown"
     assert info.source == "cache"
 
@@ -172,14 +172,14 @@ def test_token_is_sent_but_never_leaked(scratch, cache_dir):
         return 200, json.dumps({"tag_name": "v0.39.0"}).encode("utf-8")
 
     info = GithubClient(http=_http, cache_dir=cache_dir, token="ghp_secret_value").latest(
-        make_entry(scratch)
+        release_entry(scratch)
     )
     assert seen.get("Authorization") == "Bearer ghp_secret_value"
     assert "ghp_secret_value" not in json.dumps(info.__dict__)
 
 
 def test_commit_pinned_entry_reports_head_commit(scratch, cache_dir):
-    entry = make_entry(
+    entry = release_entry(
         scratch,
         version="0.24.1",
         tag_prefix="open-design-v",
@@ -202,7 +202,7 @@ def test_commit_pinned_entry_reports_head_commit(scratch, cache_dir):
 
 def commit_entry(scratch, synced_commit=None, package="humanizer-zh-skill-dsh"):
     entry = replace(
-        make_entry(
+        release_entry(
             scratch,
             version="0.1.0",
             tag_prefix="",
@@ -346,3 +346,82 @@ def test_commit_kind_offline_uses_the_cached_revision(scratch, cache_dir):
 
     info = GithubClient(http=_offline, cache_dir=cache_dir, offline=True).latest(entry)
     assert (info.status, info.commit) == ("update_available", "b" * 40)
+
+
+def make_entry(
+    *,
+    repo: str = "demo/skills",
+    tag_prefix: str = "v",
+    version: str = "1.0.0",
+    package: str = "demo-skill-dsh",
+    commit_pinned: bool = False,
+) -> Entry:
+    """A bare entry for the routing questions: no plugin tree is involved."""
+    return Entry(
+        package=package,
+        plugin_dir=None,
+        repo=repo,
+        tag_prefix=tag_prefix,
+        skills_root="skills",
+        strip_prefix="",
+        recipe="demo",
+        expected_skills=("demo",),
+        manual_skills=(),
+        commit_pinned=commit_pinned,
+        license="MIT",
+        notes="",
+    )
+
+
+# ---- tag pagination -----------------------------------------------------
+#
+# The tracked bundle upstream has 561 tags, so its prefix can land on page 2.
+# Reading only page 1 turns "there is a release" into "unknown", which a later
+# task would either misreport or land a broken bundle over.
+
+
+def _tags_page(names):
+    return 200, json.dumps([{"name": n} for n in names]).encode()
+
+
+def test_tags_are_found_on_a_later_page():
+    """上游有 561 个 tag，我们的前缀可能落在第 2 页。"""
+    entry = make_entry(repo="aliyun/alibabacloud-aiops-skills",
+                       tag_prefix="alibabacloud-workbench-cli-")
+    pages = {
+        1: [f"zzz-other-{i}-0.0.1" for i in range(100)],          # 无匹配
+        2: ["alibabacloud-workbench-cli-0.0.2"],                  # 匹配
+    }
+    seen = []
+    def http(url, headers):
+        page = int(url.split("page=")[-1]) if "page=" in url else 1
+        seen.append(page)
+        return _tags_page(pages.get(page, []))
+    client = GithubClient(http=http, cache_dir=None)
+    tag, commit, source = client._query_tags(entry, client._headers())
+    assert (tag, source) == ("alibabacloud-workbench-cli-0.0.2", "tags")
+    assert seen == [1, 2]
+
+
+def test_missing_prefix_within_the_page_cap_is_unknown():
+    """扫满上限仍无匹配 → unknown，绝不假 up_to_date。"""
+    entry = make_entry(repo="o/r", tag_prefix="nothing-")
+    def http(url, headers):
+        if "/tags" in url:
+            return _tags_page([f"other-{i}-1.0.0" for i in range(100)])
+        return 404, b"{}"
+    client = GithubClient(http=http, cache_dir=None)
+    assert client._query_tags(entry, client._headers()) == (None, None, "tags")
+    assert client.latest(entry).status == "unknown"
+
+
+def test_single_page_behaviour_is_unchanged():
+    """今天就能用的路径不许变：第 1 页命中即返回，且不再多请求。"""
+    entry = make_entry(repo="o/r", tag_prefix="v")
+    seen = []
+    def http(url, headers):
+        seen.append(url)
+        return _tags_page(["v0.1.0", "v0.2.0"])
+    client = GithubClient(http=http, cache_dir=None)
+    assert client._query_tags(entry, client._headers())[0] == "v0.2.0"
+    assert len(seen) == 1

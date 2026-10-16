@@ -30,6 +30,14 @@ API_ROOT = "https://api.github.com"
 DEFAULT_TIMEOUT_SECONDS = 25
 USER_AGENT = "skill-sync-dsh"
 
+# Tag lookups page: the tracked upstreams can carry hundreds of tags (the
+# alibabacloud-aiops-skills bundle was at 561), so the matching prefix is not
+# guaranteed to be on page 1 -- reading only page 1 reported ``unknown`` for a
+# release that exists. The cap is not unlimited because these requests spend the
+# 60/h anonymous quota: five pages bound one lookup at 5 requests, and a prefix
+# that has not appeared by then is reported unknown rather than guessed.
+MAX_TAG_PAGES = 5
+
 STATUS_UP_TO_DATE = "up_to_date"
 STATUS_UPDATE_AVAILABLE = "update_available"
 STATUS_UNKNOWN = "unknown"
@@ -267,34 +275,57 @@ class GithubClient:
         return self._query_tags(entry, headers)
 
     def _query_tags(self, entry: Entry, headers: dict) -> tuple[str | None, str | None, str]:
-        status, body = self._call(
-            f"{API_ROOT}/repos/{entry.repo}/tags?per_page=100", headers
-        )
-        if status in (403, 429):
-            raise UpstreamError(RATE_LIMIT_REASON)
-        if status == 404:
-            raise UpstreamError(f"{entry.repo}: repository not found or renamed (HTTP 404)")
-        if status != 200:
-            raise UpstreamError(f"{entry.repo}: GitHub API returned HTTP {status}")
+        """The greatest matching tag, reading pages until the prefix block ends.
 
-        try:
-            tags = json.loads(body or b"[]")
-        except (json.JSONDecodeError, UnicodeDecodeError) as exc:
-            raise UpstreamError(f"{entry.repo}: malformed tag payload: {exc}") from exc
-
-        # GitHub does not contract an order, so take the greatest matching version
-        # rather than the first one on the page.
+        GitHub returns tags 100 at a time in no contracted order, and the tracked
+        upstreams can carry hundreds -- so the matching prefix may sit on page 2
+        or later. A full page with no match does not end the search until a match
+        has been seen: that is exactly the case that used to be reported unknown.
+        """
         best: str | None = None
         best_version: str | None = None
-        for item in tags:
-            name = item.get("name") if isinstance(item, dict) else None
-            if not isinstance(name, str):
-                continue
-            version = normalize_tag(name, entry.tag_prefix)
-            if version is None:
-                continue
-            if best is None or is_newer(best_version or version, version):
-                best, best_version = name, version
+        seen_match = False
+
+        for page in range(1, MAX_TAG_PAGES + 1):
+            status, body = self._call(
+                f"{API_ROOT}/repos/{entry.repo}/tags?per_page=100&page={page}", headers
+            )
+            if status in (403, 429):
+                raise UpstreamError(RATE_LIMIT_REASON)
+            if status == 404:
+                raise UpstreamError(f"{entry.repo}: repository not found or renamed (HTTP 404)")
+            if status != 200:
+                raise UpstreamError(f"{entry.repo}: GitHub API returned HTTP {status}")
+
+            try:
+                tags = json.loads(body or b"[]")
+            except (json.JSONDecodeError, UnicodeDecodeError) as exc:
+                raise UpstreamError(f"{entry.repo}: malformed tag payload: {exc}") from exc
+
+            # GitHub does not contract an order, so take the greatest matching
+            # version rather than the first one on the page.
+            matched_here = False
+            for item in tags:
+                name = item.get("name") if isinstance(item, dict) else None
+                if not isinstance(name, str):
+                    continue
+                version = normalize_tag(name, entry.tag_prefix)
+                if version is None:
+                    continue
+                matched_here = True
+                if best is None or is_newer(best_version or version, version):
+                    best, best_version = name, version
+
+            if matched_here:
+                seen_match = True
+
+            # A short page is the end of the tag list. Once a match has been seen,
+            # a full page without one means the prefix block is over.
+            if len(tags) < 100:
+                break
+            if seen_match and not matched_here:
+                break
+
         if best is None:
             return None, None, "tags"
 
