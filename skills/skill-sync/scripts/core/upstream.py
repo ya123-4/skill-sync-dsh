@@ -25,7 +25,7 @@ from typing import Callable
 
 from core import state
 from core.registry import Entry
-from core.versions import is_newer, normalize_tag, normalize_version
+from core.versions import is_newer, is_prerelease, normalize_tag, normalize_version
 
 API_ROOT = "https://api.github.com"
 DEFAULT_TIMEOUT_SECONDS = 25
@@ -311,7 +311,10 @@ class GithubClient:
                 if not isinstance(name, str):
                     continue
                 version = normalize_tag(name, entry.tag_prefix)
-                if version is None:
+                if version is None or is_prerelease(version):
+                    # A pre-release is not a release: never a candidate, however new
+                    # its numeric core. This is what makes the registry's "a -beta.N
+                    # tag cannot trigger an update" statement true rather than lucky.
                     continue
                 matched_here = True
                 if best is None or is_newer(best_version or version, version):
@@ -526,9 +529,7 @@ def _fetch_tarball(
     Two separate contracts, and only the first is unchanged:
 
     * **Extraction** behaves as it always did -- same cache layout, same
-      ``.complete`` marker, same single checkout directory, and on POSIX the same
-      path spelling. The extended-length destination below is a Windows detail
-      that callers never see.
+      ``.complete`` marker, and the same single checkout directory.
     * **The returned path is spelled through ``_long_path`` on Windows for every
       checkout, short ones included** -- not only for trees that are themselves
       long. Callers append long relative paths to the result (the alibabacloud

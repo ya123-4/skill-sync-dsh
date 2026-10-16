@@ -43,6 +43,19 @@ def normalize_version(raw: str) -> tuple[int, ...] | None:
     return tuple(int(part) for part in match.group("core").split("."))
 
 
+def is_prerelease(raw: str) -> bool:
+    """True when a normalised version carries a pre-release marker.
+
+    The tag fallback has to mirror ``releases/latest``, which GitHub also defines as
+    the newest *non*-pre-release. ``0.0.2-beta.1`` is never the release, and it must
+    not be selected even when its numeric core is newer than what is installed, so
+    the skip happens on the tag string before the numeric comparison -- because
+    :func:`normalize_version` deliberately discards the pre-release part.
+    """
+    match = _VERSION_RE.match((raw or "").strip())
+    return bool(match and match.group("pre"))
+
+
 def is_newer(local: str, remote: str) -> bool:
     """True when ``remote`` is a later release than ``local``.
 

@@ -5,7 +5,7 @@ description: Check whether skill bundles built from open-source skill repositori
 
 # skill-sync
 
-Fourteen packages are managed from one registry. Eight are rebuilt bundles: seven are
+Fifteen packages are managed from one registry. Nine are rebuilt bundles: eight are
 assembled from an open-source skill repository, and `rea-dsh-plugin` is assembled from
 the published `rea-agents` npm package — its skills ship inside that package, and the
 release it vendored is pinned in its `optionalDependencies`, because the plugin's own

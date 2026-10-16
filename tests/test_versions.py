@@ -1,5 +1,5 @@
 """Tag normalization and comparison used by every upstream check."""
-from core.versions import is_newer, normalize_tag
+from core.versions import is_newer, is_prerelease, normalize_tag
 
 
 def test_normalize_strips_v_prefix():
@@ -38,3 +38,14 @@ def test_is_newer_equal_versions():
 
 def test_is_newer_pads_short_versions():
     assert is_newer("1.7", "1.7.1") is True
+
+
+def test_is_prerelease_flags_every_marked_shape():
+    assert is_prerelease("1.0.0-rc.1") is True
+    assert is_prerelease("0.0.2-beta.1") is True
+    assert is_prerelease("2.0.0alpha3") is True
+
+
+def test_is_prerelease_leaves_plain_releases_alone():
+    assert is_prerelease("0.38.2") is False
+    assert is_prerelease("1.7") is False

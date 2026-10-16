@@ -425,3 +425,39 @@ def test_single_page_behaviour_is_unchanged():
     client = GithubClient(http=http, cache_dir=None)
     assert client._query_tags(entry, client._headers())[0] == "v0.2.0"
     assert len(seen) == 1
+
+
+# ---- pre-releases are not releases --------------------------------------
+#
+# The registry promises that a `-beta.N` tag cannot trigger an update. That used to
+# be true only because GitHub happens to return the stable tag first: the numeric
+# comparison drops the pre-release part, so a beta whose core is newer won. These
+# tests make the promise a property of the code instead of an accident of ordering.
+
+
+def test_a_prerelease_is_never_a_candidate():
+    """0.0.2-beta.1 must not beat an installed 0.0.1, even though its core is newer."""
+    entry = make_entry(repo="aliyun/alibabacloud-aiops-skills",
+                       tag_prefix="alibabacloud-workbench-cli-",
+                       version="0.0.1")
+    def http(url, headers):
+        return _tags_page(["alibabacloud-workbench-cli-0.0.2-beta.1"])
+    client = GithubClient(http=http, cache_dir=None)
+    assert client._query_tags(entry, client._headers()) == (None, None, "tags")
+
+
+def test_a_prerelease_ordering_the_stable_tag_first_still_picks_the_stable_one():
+    entry = make_entry(repo="o/r", tag_prefix="v", version="0.0.1")
+    def http(url, headers):
+        return _tags_page(["v0.0.2-beta.1", "v0.0.2"])
+    client = GithubClient(http=http, cache_dir=None)
+    assert client._query_tags(entry, client._headers())[0] == "v0.0.2"
+
+
+def test_a_prerelease_listed_after_a_lower_stable_tag_is_still_ignored():
+    """The reported failure shape: beta first, stable lower, core higher on the beta."""
+    entry = make_entry(repo="o/r", tag_prefix="v", version="0.0.1")
+    def http(url, headers):
+        return _tags_page(["v0.0.2-beta.1", "v0.0.1"])
+    client = GithubClient(http=http, cache_dir=None)
+    assert client._query_tags(entry, client._headers())[0] == "v0.0.1"
