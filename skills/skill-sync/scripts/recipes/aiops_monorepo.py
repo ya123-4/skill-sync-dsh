@@ -13,9 +13,10 @@ One local deviation is named: the upstream ``alibabacloud-workbench-cli`` text a
 generic Linux shell, while this host runs the CLI portably under a sandbox that cannot
 write ``~``. The DSH note in ``overlays/alibabacloud-workbench-cli/dsh-notes.txt`` is a
 reviewable file, not prose buried in this module. It is inserted after the last row of
-upstream's Troubleshooting table and nowhere else: the anchor occurs exactly once, the
-transform is computed in memory and only a successful result is written, so a rewritten
-anchor raises ``AnchorNotFound`` and cannot leave a half-patched ``SKILL.md`` behind.
+upstream's Troubleshooting table and nowhere else: the anchor occurs exactly once, it must
+still be the file's last content, the transform is computed in memory and only a successful
+result is written, so a rewritten or relocated anchor raises ``AnchorNotFound`` and cannot
+leave a half-patched ``SKILL.md`` behind.
 
 Upstream's bytes are copied verbatim; the only thing written by this module is that
 inserted block. Any other difference between the bundle and upstream would have no name,
@@ -52,18 +53,34 @@ OVERLAY_TARGETS = frozenset({"alibabacloud-workbench-cli"})
 # which row to insert after. It is not the insertion point itself, because inserting
 # directly after it would splice the note into the middle of that row, leaving the rest of
 # upstream's fix column stranded at the end of the file. ``_anchor_row`` below extends it to
-# the whole row so the note lands below the table.
+# the whole row -- and refuses a row that is no longer the file's last content, so the note
+# can only ever land at the document tail.
 LAST_TROUBLESHOOTING_ROW_START = "| STS token expired | 4 |"
 
 OVERLAY_DIR = Path(__file__).resolve().parent / "overlays"
 
 
 def _overlay_text(name: str) -> str:
+    """Return the named overlay block, refusing an overlay this plugin cannot apply.
+
+    The overlay file belongs to this plugin, not to upstream, so a missing, undecodable or
+    newline-broken one is a packaging fault (``StructureChanged``, exit code 4) and never an
+    ``AnchorNotFound`` that would read as upstream having moved its table. Since the note is
+    written at the end of the file, the overlay's own final newline is the file's final
+    newline, so it has to be exactly one.
+    """
     path = OVERLAY_DIR / name / "dsh-notes.txt"
     try:
-        return path.read_text(encoding="utf-8")
+        text = path.read_text(encoding="utf-8")
     except FileNotFoundError as exc:  # a packaging error, not an upstream change
         raise StructureChanged(f"overlay text is missing from this plugin: {path}") from exc
+    except UnicodeDecodeError as exc:  # also packaging: the overlay is not UTF-8 text
+        raise StructureChanged(f"overlay text is not valid UTF-8: {path}") from exc
+    if not text.endswith("\n") or text.endswith("\n\n"):
+        raise StructureChanged(
+            f"overlay text must end in exactly one newline, not {text[-2:]!r}: {path}"
+        )
+    return text
 
 
 def _anchor_row(text: str, start: str) -> str:
@@ -73,6 +90,12 @@ def _anchor_row(text: str, start: str) -> str:
     identify one row, and inserting at a partial row would only look right. The trailing
     newline is part of the returned row so that inserting after it leaves the note as the
     file's own last line rather than re-terminating a line that already ended.
+
+    The row must also be the *last* content in the file. If upstream appends anything to the
+    table's end -- another row, an appendix, prose -- then this row no longer names the
+    document tail, and inserting after it would drop the note into the middle of upstream's
+    text. That is the anchor having moved, so it raises instead of relocating; only trailing
+    whitespace is tolerated here, and ``_overlaid`` refuses that after the insertion.
     """
     first = text.find(start)
     if first < 0:
@@ -80,23 +103,36 @@ def _anchor_row(text: str, start: str) -> str:
     if text.find(start, first + len(start)) >= 0:
         raise AnchorNotFound(f"anchor is not unique: {start!r}")
     line_end = text.find("\n", first)
-    return text[first:] if line_end < 0 else text[first : line_end + 1]
+    row = text[first:] if line_end < 0 else text[first : line_end + 1]
+    trailing = text[first + len(row) :]
+    if trailing.strip():
+        raise AnchorNotFound(
+            f"the anchor row {start!r} is not the file's last content: "
+            f"{len(trailing)} more characters follow it, beginning {trailing[:40]!r}"
+        )
+    return row
 
 
 def _overlaid(text: str, name: str) -> bytes:
     """Return ``text`` with the named DSH note appended after the anchor row.
 
-    The transform is pure: the caller writes the returned bytes exactly once, so a missing
-    or ambiguous anchor raises before the staged tree has been touched. The note goes after
-    the *whole* anchor row -- inserting straight after a row prefix would split the row and
-    strand the rest of upstream's fix text at the end of the file.
+    The transform is pure: the caller writes the returned bytes exactly once, so a missing,
+    ambiguous or relocated anchor raises before the staged tree has been touched. The note
+    goes after the *whole* anchor row -- inserting straight after a row prefix would split
+    the row and strand the rest of upstream's fix text at the end of the file.
+
+    ``_anchor_row`` rejects anything readable after the row but tolerates trailing
+    *whitespace*; this guard refuses that too, so the note really is the file's last content
+    and the file still ends in exactly one newline (``_overlay_text`` guarantees the note's
+    own final newline is a single one). When it fires it is upstream's shape that moved: the
+    overlay file is not at fault, and the message says so.
     """
-    updated = insert_after(
-        text, _anchor_row(text, LAST_TROUBLESHOOTING_ROW_START), _overlay_text(name)
-    )
-    if not updated.endswith("\n") or updated.endswith("\n\n"):
+    note = _overlay_text(name)
+    updated = insert_after(text, _anchor_row(text, LAST_TROUBLESHOOTING_ROW_START), note)
+    if not updated.endswith(note) or updated.endswith("\n\n"):
         raise AnchorNotFound(
-            f"{name}: the overlay left SKILL.md ending in {updated[-2:]!r}, expected one newline"
+            f"{name}: SKILL.md carries whitespace after the anchor row, so the note would not "
+            f"be the file's last content (the patched file ends {updated[-4:]!r})"
         )
     return updated.encode("utf-8")
 
@@ -126,12 +162,20 @@ def assemble(context: RecipeContext) -> RecipeResult:
 
     # Transform before writing, not file by file: a moved anchor must fail the whole
     # build, not leave a partially staged skill behind for a later step to install.
+    # read_bytes().decode(), not read_text(): text mode applies universal-newline
+    # translation, which would quietly rewrite a CRLF upstream to LF and contradict the
+    # "upstream's bytes are copied verbatim" contract above.
     patched: dict[str, bytes] = {}
     for name in entry.expected_skills:
         if name in OVERLAY_TARGETS:
-            patched[name] = _overlaid(
-                (skills_root / name / "SKILL.md").read_text(encoding="utf-8"), name
-            )
+            skill_md = skills_root / name / "SKILL.md"
+            try:
+                text = skill_md.read_bytes().decode("utf-8")
+            except UnicodeDecodeError as exc:
+                raise StructureChanged(
+                    f"{entry.package}: upstream {entry.skills_root}/{name}/SKILL.md is not UTF-8"
+                ) from exc
+            patched[name] = _overlaid(text, name)
 
     staging_skills = context.staging_dir / "skills"
     skills: list[str] = []

@@ -11,6 +11,7 @@ The one named local deviation is the overlay under ``recipes/overlays/``; it is 
 after the upstream Troubleshooting table's last row and nowhere else, so a moved anchor
 is an ``AnchorNotFound`` rather than a note appended in the wrong place.
 """
+from dataclasses import replace
 from pathlib import Path
 
 import pytest
@@ -104,7 +105,7 @@ def test_only_declared_skills_are_copied(scratch, entry):
 
 
 def test_missing_declared_skill_is_a_structure_change(scratch, entry):
-    """Upstream dropping the skill must be reported, not silently produce an empty bundle."""
+    """An upstream with no skills tree at all must be reported, not vendored as an empty bundle."""
     from recipes.aiops_monorepo import assemble
 
     upstream = scratch / "upstream"
@@ -112,8 +113,31 @@ def test_missing_declared_skill_is_a_structure_change(scratch, entry):
     staging = scratch / "staging"
     staging.mkdir()
 
-    with pytest.raises(StructureChanged):
+    with pytest.raises(StructureChanged) as excinfo:
         assemble(context_for(upstream, staging, entry))
+
+    assert not (staging / "skills").exists()
+    assert entry.skills_root in str(excinfo.value)
+
+
+def test_a_declared_skill_missing_from_a_present_skills_root_is_a_structure_change(scratch, entry):
+    """``skills_root`` exists and holds other skills: the *declared* directory is what is gone.
+
+    This is the branch the empty-upstream test above cannot reach -- upstream still has
+    ``skills/developertools/solutions/``, so the monorepo shape looks fine until the one
+    declared directory turns out to be missing.
+    """
+    from recipes.aiops_monorepo import assemble
+
+    upstream = upstream_root(scratch, ["some-other-skill"])
+    staging = scratch / "staging"
+    staging.mkdir()
+
+    with pytest.raises(StructureChanged) as excinfo:
+        assemble(context_for(upstream, staging, entry))
+
+    assert UPSTREAM_SKILL in str(excinfo.value)
+    assert not (staging / "skills").exists()
 
 
 def test_a_declared_skill_without_a_skill_md_is_a_structure_change(scratch, entry):
@@ -128,6 +152,77 @@ def test_a_declared_skill_without_a_skill_md_is_a_structure_change(scratch, entr
 
     with pytest.raises(StructureChanged):
         assemble(context_for(upstream, staging, entry))
+
+
+def test_a_second_declared_skill_outside_the_overlay_targets_is_copied_verbatim(scratch, entry):
+    """The overlay is for the skill that needs it; another declared skill is vendored untouched.
+
+    The fixture gives every skill the same Troubleshooting table, so the second skill carries
+    the anchor too. An "apply the overlay to every declared skill" regression therefore
+    changes its bytes (and adds a second note) instead of passing unnoticed.
+    """
+    from recipes.aiops_monorepo import assemble
+
+    other = "some-other-skill"
+    upstream = upstream_root(scratch, [UPSTREAM_SKILL, other])
+    staging = scratch / "staging"
+    staging.mkdir()
+
+    result = assemble(
+        context_for(upstream, staging, replace(entry, expected_skills=(UPSTREAM_SKILL, other)))
+    )
+
+    assert result.skills == [UPSTREAM_SKILL, other]
+    staged = (staging / "skills" / other / "SKILL.md").read_bytes()
+    assert staged == (upstream / entry.skills_root / other / "SKILL.md").read_bytes()
+    assert b"DeepSeek Harness notes" not in staged
+    assert len(result.notes) == 1
+    assert UPSTREAM_SKILL in result.notes[0]
+    assert "## DeepSeek Harness notes" in (
+        staging / "skills" / UPSTREAM_SKILL / "SKILL.md"
+    ).read_text(encoding="utf-8")
+
+
+def test_a_crlf_skill_md_is_copied_byte_for_byte(scratch, entry):
+    """Upstream's bytes are copied verbatim: text mode would silently rewrite CRLF to LF.
+
+    The only bytes this recipe may add are the overlay block, so the staged file is exactly
+    upstream's bytes followed by the overlay file's bytes -- CRs included.
+    """
+    from recipes import aiops_monorepo
+    from recipes.aiops_monorepo import assemble
+
+    upstream = upstream_root(scratch, [UPSTREAM_SKILL])
+    skill_md = upstream / entry.skills_root / UPSTREAM_SKILL / "SKILL.md"
+    crlf = skill_md.read_bytes().replace(b"\n", b"\r\n")
+    assert b"\r\n" in crlf
+    skill_md.write_bytes(crlf)
+    overlay = (aiops_monorepo.OVERLAY_DIR / UPSTREAM_SKILL / "dsh-notes.txt").read_bytes()
+    staging = scratch / "staging"
+    staging.mkdir()
+
+    assemble(context_for(upstream, staging, entry))
+
+    staged = (staging / "skills" / UPSTREAM_SKILL / "SKILL.md").read_bytes()
+    assert staged == crlf + overlay
+
+
+def test_a_non_utf8_skill_md_is_a_structure_change(scratch, entry):
+    """Bytes this recipe cannot read are an upstream shape change: exit 4, not a traceback."""
+    from recipes.aiops_monorepo import assemble
+
+    upstream = upstream_root(scratch, [UPSTREAM_SKILL])
+    (upstream / entry.skills_root / UPSTREAM_SKILL / "SKILL.md").write_bytes(
+        b"---\nname: x\n---\n\n\xff\xfe not UTF-8\n"
+    )
+    staging = scratch / "staging"
+    staging.mkdir()
+
+    with pytest.raises(StructureChanged) as excinfo:
+        assemble(context_for(upstream, staging, entry))
+
+    assert UPSTREAM_SKILL in str(excinfo.value)
+    assert not (staging / "skills").exists()
 
 
 def test_overlay_is_appended_after_the_troubleshooting_table(scratch, entry):
@@ -177,6 +272,57 @@ def test_moved_anchor_raises_instead_of_relocating(scratch, entry):
         assemble(context_for(upstream, staging, entry))
 
     assert not (staging / "skills" / UPSTREAM_SKILL / "SKILL.md").exists()
+    # Not just that one file: a moved anchor must not leave a candidate tree behind at all.
+    assert not (staging / "skills").exists()
+
+
+def test_prose_after_the_table_raises_instead_of_relocating(scratch, entry):
+    """Upstream appending prose after the table moves the anchor off the document tail.
+
+    The note may only be appended at the end of the file. This input evades the
+    "ends in exactly one newline" guard -- the note lands mid-document and the result still
+    ends in a single ``\\n`` -- so without the tail check a misplaced note would ship
+    silently, which is the failure mode the anchor contract exists to prevent.
+    """
+    from recipes.aiops_monorepo import assemble
+
+    upstream = upstream_root(scratch, [UPSTREAM_SKILL])
+    skill_md = upstream / entry.skills_root / UPSTREAM_SKILL / "SKILL.md"
+    skill_md.write_bytes(skill_md.read_bytes() + b"\n## Appendix\n\nmore.\n")
+    staging = scratch / "staging"
+    staging.mkdir()
+
+    with pytest.raises(AnchorNotFound) as excinfo:
+        assemble(context_for(upstream, staging, entry))
+
+    assert "is not the file's last content" in str(excinfo.value)
+    assert not (staging / "skills").exists()
+
+
+@pytest.mark.parametrize("tail", [b"\n", b"   \n", b"\n \n"])
+def test_whitespace_after_the_table_is_refused_as_an_upstream_shape(scratch, entry, tail):
+    """Whitespace after the row is an upstream shape question, so the refusal must say so.
+
+    The overlay file is not at fault here: upstream no longer ends at its table. The message
+    must name what actually went wrong instead of blaming the note the recipe was applying,
+    and the note must never be left stranded above a whitespace-only line -- including tails
+    that end in a single newline, which a plain "ends in one newline" check would accept.
+    """
+    from recipes.aiops_monorepo import assemble
+
+    upstream = upstream_root(scratch, [UPSTREAM_SKILL])
+    skill_md = upstream / entry.skills_root / UPSTREAM_SKILL / "SKILL.md"
+    skill_md.write_bytes(skill_md.read_bytes() + tail)
+    staging = scratch / "staging"
+    staging.mkdir()
+
+    with pytest.raises(AnchorNotFound) as excinfo:
+        assemble(context_for(upstream, staging, entry))
+
+    message = str(excinfo.value)
+    assert "whitespace after the anchor row" in message
+    assert "overlay" not in message.lower()
+    assert not (staging / "skills").exists()
 
 
 def test_a_backticked_anchor_is_not_upstreams_row(scratch, entry):
@@ -227,3 +373,40 @@ def test_an_ambiguous_anchor_raises_instead_of_picking_one(scratch, entry):
         assemble(context_for(upstream, staging, entry))
 
     assert not (staging / "skills" / UPSTREAM_SKILL / "SKILL.md").exists()
+
+
+def test_a_missing_overlay_is_a_packaging_fault(scratch, entry, monkeypatch):
+    """An absent overlay file is a broken plugin, not upstream moving its table."""
+    from recipes import aiops_monorepo
+    from recipes.aiops_monorepo import assemble
+
+    monkeypatch.setattr(aiops_monorepo, "OVERLAY_DIR", scratch / "no-overlays-here")
+    upstream = upstream_root(scratch, [UPSTREAM_SKILL])
+    staging = scratch / "staging"
+    staging.mkdir()
+
+    with pytest.raises(StructureChanged) as excinfo:
+        assemble(context_for(upstream, staging, entry))
+
+    assert "overlay text is missing" in str(excinfo.value)
+    assert not (staging / "skills").exists()
+
+
+def test_a_malformed_overlay_is_a_packaging_fault(scratch, entry, monkeypatch):
+    """An overlay that does not end in exactly one newline must not be blamed on the anchor."""
+    from recipes import aiops_monorepo
+    from recipes.aiops_monorepo import assemble
+
+    overlays = scratch / "overlays" / UPSTREAM_SKILL
+    overlays.mkdir(parents=True)
+    (overlays / "dsh-notes.txt").write_bytes(b"\n## DeepSeek Harness notes\n\nno final newline")
+    monkeypatch.setattr(aiops_monorepo, "OVERLAY_DIR", scratch / "overlays")
+    upstream = upstream_root(scratch, [UPSTREAM_SKILL])
+    staging = scratch / "staging"
+    staging.mkdir()
+
+    with pytest.raises(StructureChanged) as excinfo:
+        assemble(context_for(upstream, staging, entry))
+
+    assert "exactly one newline" in str(excinfo.value)
+    assert not (staging / "skills").exists()
