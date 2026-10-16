@@ -1,0 +1,18 @@
+
+## DeepSeek Harness notes
+
+This skill was written for a generic Linux shell. In DeepSeek Harness on this host:
+
+1. **The CLI is portable, not on PATH.** Run `tools\workbench\workbench.exe` from the workspace.
+   The official installer writes `%ProgramFiles%\workbench` and appends to the *user PATH registry
+   value* — do not run it unless the human asks.
+2. **Credentials** live in `~\.workbench\config.json` (mode `AK`). The DSH sandbox cannot write the
+   home directory: to change that file, ask for a one-shot permission escalation, or pass
+   `ALIBABA_CLOUD_ACCESS_KEY_ID` / `ALIBABA_CLOUD_ACCESS_KEY_SECRET` for the single invocation.
+3. **`list` and `config` work inside the sandbox; `exec`, `upload`, `download` and `connect` do not.**
+   Those need the background daemon, which requires `~/.workbench/run` to be writable and its IPC
+   pipe to be reachable; inside the sandbox the daemon reports `self-dial check failed` /
+   `Access is denied`. Run them with a one-shot permission escalation, or from a terminal outside
+   DeepSeek Harness. Do not retry in a loop when it fails this way.
+4. **Destructive commands still require explicit human approval** — `rm -rf`, `shutdown`, `reboot`,
+   `mkfs`, `dd`, service stop/restart. State the target instance and the impact first.
