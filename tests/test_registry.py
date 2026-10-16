@@ -8,8 +8,8 @@ from core.registry import RegistryError, load, resolve_workspace, select
 WORKSPACE = Path(__file__).resolve().parents[3]
 NOWHERE = Path("C:/definitely-not-a-workspace-xyz")
 
-# 六个 rebuild：前五个的上游是 GitHub 仓库的 tag，rea-dsh-plugin 的上游是 npm 包
-# rea-agents（版本线由 optionalDependencies 钉住）。其余跟随上游发布：archify 与
+# 大多数条目是 rebuild：上游是 GitHub 仓库的 tag 或 commit，rea-dsh-plugin 的上游是 npm
+# 包 rea-agents（版本线由 optionalDependencies 钉住）。其余跟随上游发布：archify 与
 # ppt-master 是 snapshot（整体替换 release 资产），剩下的是 npm manual（只报告，不落盘）。
 EXPECTED_PACKAGES = [
     "agent-browser-skill-dsh",
@@ -26,6 +26,7 @@ EXPECTED_PACKAGES = [
     "dsh-mnemon",
     "dsh-whale-widget",
     "dshmarket",
+    "alibabacloud-workbench-cli-skill-dsh",
 ]
 
 
@@ -138,6 +139,23 @@ def test_humanizer_entries(registry):
     # The tag path needs this to record the commit a tag points at: without it the
     # state carries no revision, and a re-pointed tag would go unnoticed.
     assert en.commit_pinned is True
+
+
+def test_alibabacloud_workbench_cli_entry_fields(registry):
+    """A monorepo of ~200 skills, of which exactly one directory ships."""
+    entry = by_package(registry, "alibabacloud-workbench-cli-skill-dsh")
+    assert (entry.kind, entry.mode) == ("github-tags", "rebuild")
+    assert (entry.repo, entry.tag_prefix, entry.skills_root, entry.strip_prefix) == (
+        "aliyun/alibabacloud-aiops-skills",
+        "alibabacloud-workbench-cli-",
+        "skills/developertools/solutions",
+        "",
+    )
+    assert entry.recipe == "aiops_monorepo"
+    assert entry.expected_skills == ("alibabacloud-workbench-cli",)
+    assert entry.manual_skills == ()
+    assert entry.commit_pinned is True
+    assert entry.license == "Apache-2.0"
 
 
 def test_select_unknown_package_raises(registry):

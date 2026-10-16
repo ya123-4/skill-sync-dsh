@@ -1,8 +1,8 @@
 # Third-Party Notices
 
 `skill-sync-dsh` ships **no third-party skill content**. It contains a registry, recipes and
-tests that rebuild five other bundles, and it downloads upstream material at run time rather
-than redistributing it.
+tests that rebuild nine other bundles and replace two more from release assets, and it
+downloads upstream material at run time rather than redistributing it.
 
 The upstream projects it knows about, and the licences of the material it rebuilds:
 
@@ -13,6 +13,7 @@ The upstream projects it knows about, and the licences of the material it rebuil
 | [obra/superpowers](https://github.com/obra/superpowers) | MIT | Every skill under `skills/` |
 | [mattpocock/skills](https://github.com/mattpocock/skills) | MIT | The skill set listed in `.claude-plugin/plugin.json` |
 | [nexu-io/open-design](https://github.com/nexu-io/open-design) | Apache-2.0 | A curated slice: design templates, scenario and atom workflows, craft references, design systems |
+| [aliyun/alibabacloud-aiops-skills](https://github.com/aliyun/alibabacloud-aiops-skills) | Apache-2.0 (stated in the skill's frontmatter; the repository root has no `LICENSE` file) | `skills/developertools/solutions/alibabacloud-workbench-cli/` — one directory out of a ~200-skill monorepo |
 
 Each rebuilt bundle carries the full licence text and its own notices; this file only records
 what the manager reaches for. Upstream material is fetched from

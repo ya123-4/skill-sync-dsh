@@ -19,6 +19,7 @@ open-source skill repositories — and rebuilds them when upstream moves.
 | `rea-dsh-plugin` | npm package `rea-agents` | registry tarball at the version its `optionalDependencies` pins; skill bodies in the package's `skills/` |
 | `archify-skill-dsh` | `tt-a1i/archify` | release asset `archify.zip`; replaces `skills/archify/` wholesale (snapshot) |
 | `ppt-master-skill-dsh` | `hugohe3/ppt-master` | release asset `ppt-master-skill-{tag}.zip` (the asset name carries the version, hence the `{tag}` placeholder); `assetSubtree` unwraps the `ppt-master/skills/ppt-master/` layer (snapshot) |
+| `alibabacloud-workbench-cli-skill-dsh` | `aliyun/alibabacloud-aiops-skills` | tag `alibabacloud-workbench-cli-X.Y.Z` — a 561-tag monorepo of ~200 skills, of which only that one skill directory ships; `-beta.N` tags are not tracked |
 
 Coverage is data, not code: one entry in `skills/skill-sync/data/registry.json` manages
 another bundle — plus one recipe module in `skills/skill-sync/scripts/recipes/` for a

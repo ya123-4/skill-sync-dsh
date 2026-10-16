@@ -19,6 +19,7 @@ DeepSeek Harness 的 skill 插件「上游版本看守」：检查那些由开�
 | `rea-dsh-plugin` | npm 包 `rea-agents` | 该包的 registry tarball，版本取插件 `optionalDependencies` 里的钉版；skill 正文在包内 `skills/` |
 | `archify-skill-dsh` | `tt-a1i/archify` | release 资产 `archify.zip`，整体替换 `skills/archify/`（snapshot） |
 | `ppt-master-skill-dsh` | `hugohe3/ppt-master` | release 资产 `ppt-master-skill-{tag}.zip`（资产名含版本，用 `{tag}` 占位），`assetSubtree` 剥掉 `ppt-master/skills/ppt-master/` 这层（snapshot） |
+| `alibabacloud-workbench-cli-skill-dsh` | `aliyun/alibabacloud-aiops-skills` | tag `alibabacloud-workbench-cli-X.Y.Z`——561 个 tag、约 200 个 skill 的单体仓库，只装那一个 skill 目录；`-beta.N` tag 不跟 |
 
 覆盖面是数据而不是代码：新增一个被管插件 = 在 `skills/skill-sync/data/registry.json` 加一条登记
 （`rebuild` 型再加一个 `skills/skill-sync/scripts/recipes/` 配方模块；`snapshot` 型不需要配方，

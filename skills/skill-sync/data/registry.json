@@ -312,5 +312,26 @@
       "source": "dshmarket",
       "license": "unknown",
       "notes": "Third-party plugin installed from npm; a registry front-end for DSH plugins."
-    }  ]
+    },
+    {
+      "package": "alibabacloud-workbench-cli-skill-dsh",
+      "kind": "github-tags",
+      "mode": "rebuild",
+      "pluginDir": "dsh-plugin-build/alibabacloud-workbench-cli-skill-dsh",
+      "upstream": {
+        "repo": "aliyun/alibabacloud-aiops-skills",
+        "tagPrefix": "alibabacloud-workbench-cli-",
+        "skillsRoot": "skills/developertools/solutions",
+        "stripPrefix": ""
+      },
+      "recipe": "aiops_monorepo",
+      "expectedSkills": [
+        "alibabacloud-workbench-cli"
+      ],
+      "manualSkills": [],
+      "commitPinned": true,
+      "license": "Apache-2.0",
+      "notes": "阿里云 AIops skills 单体仓库（561 个按 skill 命名的 tag，本 bundle 只跟踪 alibabacloud-workbench-cli- 前缀的正式版本线；同 core 的 -beta.N 不会触发更新，属已知限制）。只取 skills/developertools/solutions/alibabacloud-workbench-cli/ 一个目录，逐字节复制后按 D4b 追加一节 DSH 说明（overlay 文本在 recipes/overlays/ 下）。SKILL.md 的 allowed-tools 与安装示例是 bash/curl 语境，DSH 上不适用，这是本 bundle 唯一具名偏离。"
+    }
+  ]
 }
