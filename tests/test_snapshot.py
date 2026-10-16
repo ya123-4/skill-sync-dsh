@@ -6,7 +6,9 @@ reproducible offline.
 """
 import io
 import json
+import os
 import tarfile
+from pathlib import Path
 
 import pytest
 
@@ -147,6 +149,44 @@ def test_missing_release_is_not_retried(scratch):
             sleep=lambda _: None,
         )
     assert len(calls) == 1
+
+
+def test_deeply_nested_members_extract_on_a_long_path_host(scratch):
+    """本机 LongPathsEnabled=0；成员名长到普通路径必炸时仍要能取出文件。
+
+    The member below lands at ~332 characters under the real ``scratch`` root
+    (~106 characters) -- past MAX_PATH, and past the 292-character ``SKILL.md``
+    the alibabacloud bundle needs -- so a plain path cannot even be stat'd. The
+    returned checkout must still be usable: ``checkout / <member>`` has to
+    resolve, which is what the alibabacloud recipe does with its ``SKILL.md``.
+    """
+    deep = "/".join(["d" * 20] * 8) + "/SKILL.md"        # 176-character member path
+    payload = build_tarball(entries={deep: "deep body"})
+    root = fetch_snapshot(make_entry(scratch), "v1.0.0", scratch / "cache", serving(payload))
+    extracted = root / deep.replace("/", os.sep)
+    assert root.is_dir()
+    assert extracted.is_file()
+    assert extracted.read_bytes() == b"deep body"
+
+
+def test_removing_a_cache_root_takes_its_long_descendants_with_it(scratch):
+    """`_remove_tree` must reach past MAX_PATH, or a retry keeps the old corpse.
+
+    The root stays short (~144 characters) while its descendants do not, which is
+    exactly the shape of a real cache entry: a plain ``rmtree`` removes what it can
+    reach, gives up at the first long directory and leaves the rest behind, so the
+    next attempt would extract over a half-deleted tree.
+    """
+    from core.upstream import _long_path, _remove_tree
+
+    root = scratch / "cache" / "snapshots" / "demo__skills__v1.0.0"
+    deep = root / ("d" * 20) / ("d" * 20) / ("d" * 20) / ("d" * 20) / ("d" * 20) / ("d" * 20) / ("d" * 20)
+    Path(_long_path(deep)).mkdir(parents=True)
+
+    _remove_tree(root)
+
+    assert not root.exists()
+    assert not Path(_long_path(deep)).exists()
 
 
 def test_persistent_transport_failure_gives_up_after_three_attempts(scratch):

@@ -12,7 +12,6 @@ Two environment facts shape this file:
 """
 from __future__ import annotations
 
-import shutil
 import sys
 import uuid
 from pathlib import Path
@@ -31,10 +30,16 @@ if str(SCRIPTS_DIR) not in sys.path:
 @pytest.fixture()
 def scratch() -> Path:
     """A writable, self-cleaning scratch directory inside the workspace."""
+    from core.upstream import _remove_tree  # noqa: PLC0415 - needs sys.path above
+
     SCRATCH_ROOT.mkdir(parents=True, exist_ok=True)
     path = SCRATCH_ROOT / uuid.uuid4().hex[:12]
     path.mkdir()
     try:
         yield path
     finally:
-        shutil.rmtree(path, ignore_errors=True)
+        # A snapshot test can extract a tree whose descendants are past MAX_PATH (the
+        # alibabacloud monorepo does, and this host has LongPathsEnabled=0). A plain
+        # rmtree stops at the first such descendant and silently leaves the rest of
+        # the tree behind, so the same extended-length path is used here.
+        _remove_tree(path)

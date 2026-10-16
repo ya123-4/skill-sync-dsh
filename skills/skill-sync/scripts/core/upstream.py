@@ -10,6 +10,7 @@ Two questions live here: "is there a newer release?" (GitHub API, cached) and
 from __future__ import annotations
 
 import json
+import os
 import re
 import shutil
 import ssl
@@ -425,6 +426,11 @@ class GithubClient:
 SNAPSHOT_MARKER = ".complete"
 _COMMIT_RE = re.compile(r"[0-9a-fA-F]{7,40}")
 
+# Extended-length path prefixes (see ``_long_path``): a cached snapshot of the
+# alibabacloud monorepo reaches 292 characters on this host, past MAX_PATH.
+_LONG_PATH_PREFIX = "\\\\?\\"
+_UNC_PREFIX = "\\\\"
+
 
 class SnapshotError(RuntimeError):
     """A pinned upstream snapshot could not be fetched or unpacked (exit code 3)."""
@@ -516,6 +522,13 @@ def _fetch_tarball(
     Transport failures are retried (see ``_download``): this host's TLS
     middlebox truncates larger responses, and one flaky read must not cost a
     whole rebuild.
+
+    On Windows the tree is written through an extended-length destination and read
+    back as one (see ``_long_path``): a monorepo snapshot reaches 292 characters
+    under this cache root while ``LongPathsEnabled`` is 0, so a plain path cannot
+    even be stat'd, let alone extracted. Short paths and other platforms are
+    unaffected in every observable way -- same cache layout, same marker, same
+    single checkout directory.
     """
     root = cache_dir / "snapshots" / slug
     marker = root / SNAPSHOT_MARKER
@@ -523,7 +536,7 @@ def _fetch_tarball(
     if marker.is_file():
         cached = _single_top_dir(root)
         if cached is not None:
-            return cached
+            return _checkout_path(cached)
         raise SnapshotError(f"{slug}: cached snapshot has no single top-level directory")
 
     _remove_tree(root)  # drop the corpse of any earlier failed attempt
@@ -545,10 +558,15 @@ def _fetch_tarball(
 
     try:
         with tarfile.open(tarball) as archive:
+            # An extended-length destination is not normalised by the OS, so the
+            # archive's POSIX member names have to be converted first -- see
+            # ``_normalise_member_separators`` for why both halves are required.
+            _normalise_member_separators(archive)
+            destination = _long_path(root)
             try:
-                archive.extractall(root, filter="data")
+                archive.extractall(destination, filter="data")
             except TypeError:  # Python < 3.12 has no extraction filters
-                archive.extractall(root)
+                archive.extractall(destination)
     except tarfile.TarError as exc:
         _remove_tree(root)
         raise SnapshotError(f"{label}: not a usable gzip tarball: {exc}") from exc
@@ -559,7 +577,64 @@ def _fetch_tarball(
         raise SnapshotError(f"{label}: tarball has no single top-level directory")
 
     marker.write_text(f"{label}\n", encoding="utf-8")
-    return checkout
+    return _checkout_path(checkout)
+
+
+def _long_path(path: Path | str) -> str:
+    r"""``str(path)`` spelled so Windows can reach past MAX_PATH; unchanged elsewhere.
+
+    ``aliyun/alibabacloud-aiops-skills`` ships a 4476-member monorepo whose needed
+    ``SKILL.md`` sits 292 characters below the real cache root, while this host runs
+    with ``LongPathsEnabled=0``: the plain Win32 APIs refuse such a path before any
+    file is created (``WinError 206``, "the filename or extension is too long"), and
+    a shorter cache root cannot help -- the snapshot root is the shorter part.
+
+    ``\\?\`` lifts that limit. It also *disables* path normalisation, so the path
+    must already be absolute and free of ``.``/``..`` components, which is what
+    ``os.path.abspath`` guarantees. POSIX has no such limit and keeps the plain
+    string, so callers stay portable and no test needs a Windows-only branch.
+    """
+    text = str(path)
+    if os.name != "nt" or text.startswith(_LONG_PATH_PREFIX):
+        return text
+    absolute = os.path.abspath(text)
+    if absolute.startswith(_UNC_PREFIX):  # \\server\share -> \\?\UNC\server\share
+        return f"{_LONG_PATH_PREFIX}UNC{absolute[1:]}"
+    return _LONG_PATH_PREFIX + absolute
+
+
+def _normalise_member_separators(archive: tarfile.TarFile) -> None:
+    """Rewrite every member name in ``archive`` to this platform's separator.
+
+    ``tarfile`` hands over the names as the tarball stores them -- POSIX, with
+    ``/`` -- and ``os.path.join`` (which extraction uses) does not convert them.
+    For a plain destination the OS normalises the mixed separators itself, but an
+    extended-length destination is taken literally, so ``...\\d\\a/b`` fails with
+    ``WinError 123`` while the same tree extracts fine through a short path. Both
+    halves are required: the prefix alone, or normalisation alone, is not enough.
+
+    On POSIX separators already match, and this is a no-op.
+    """
+    if os.sep == "/":
+        return
+    for member in archive.getmembers():
+        member.name = member.name.replace("/", os.sep)
+
+
+def _checkout_path(path: Path) -> Path:
+    """The checkout as a ``Path`` spelled for this platform.
+
+    Windows gets the extended-length form for the *directory*, not just for
+    extraction, because callers append long relative paths to it: the
+    alibabacloud recipe reads ``upstream_dir / "skills/..." / "SKILL.md"`` 292
+    characters deep, and a short base would fail that read even though the bytes
+    extracted. ``pathlib`` joins both separators and the prefix survives the join,
+    which is exactly why string joining would not have worked here.
+
+    Both return sites of ``_fetch_tarball`` (fresh extraction and cache hit) go
+    through this, so the two spellings can never diverge.
+    """
+    return Path(_long_path(path))
 
 
 def _single_top_dir(root: Path) -> Path | None:
@@ -572,7 +647,14 @@ def _single_top_dir(root: Path) -> Path | None:
 
 
 def _remove_tree(path: Path) -> None:
-    shutil.rmtree(path, ignore_errors=True)
+    """Drop a cache tree, including descendants past MAX_PATH.
+
+    ``rmtree`` on the plain path stops at the first long descendant and leaves the
+    rest of the tree behind, so a failed attempt would not actually be cleaned up
+    before the next one extracts over it. The extended-length form is what lets the
+    recursion reach every level; POSIX keeps the plain string.
+    """
+    shutil.rmtree(_long_path(path), ignore_errors=True)
 
 
 def _download(
